@@ -2,8 +2,36 @@ import { createClient, type SupabaseClient, type Session } from "@supabase/supab
 import { cookies } from "next/headers";
 import { AppError } from "./domain";
 
+/**
+ * Next.js replaces a statically written `process.env.NEXT_PUBLIC_*` with whatever value
+ * existed at build time. A deployment built before those variables were set therefore has
+ * `undefined` compiled into it, and no host setting can repair that at runtime — which is
+ * exactly how "Authentication is not configured" survives a correctly configured project.
+ * Reading through a variable name is left alone by the compiler and resolves against the
+ * real runtime environment, so host configuration is honoured without a rebuild.
+ */
+export function readEnv(name: string): string | undefined {
+  return process.env[name];
+}
+
+export const REQUIRED_CONFIG = [
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "CRON_SECRET",
+  "APP_URL",
+] as const;
+
+/** Names of required settings that are absent or still hold a placeholder. Values are never returned. */
+export function missingConfig(): string[] {
+  return REQUIRED_CONFIG.filter((name) => {
+    const value = readEnv(name);
+    return !value || value.includes("[");
+  });
+}
+
 export function authClient() {
- const url=process.env.NEXT_PUBLIC_SUPABASE_URL,key=process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+ const url=readEnv("NEXT_PUBLIC_SUPABASE_URL"),key=readEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY");
  if(!url||!key||url.includes("["))throw new AppError(503,"Authentication is not configured. Ask the operator to configure Supabase.");
  return createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
 }
@@ -51,7 +79,7 @@ export function requireTenant(ac:Account,id:string) {
 }
 
 export async function authThrottle(email:string,event:"attempt"|"success"|"failure"="attempt") {
- const key=process.env.SUPABASE_SERVICE_ROLE_KEY,url=process.env.NEXT_PUBLIC_SUPABASE_URL;
+ const key=readEnv("SUPABASE_SERVICE_ROLE_KEY"),url=readEnv("NEXT_PUBLIC_SUPABASE_URL");
  if(!key||!url)throw new AppError(503,"Secure authentication is not fully configured. The operator must configure the server credential for persistent abuse controls.");
  const {createHmac}=await import("node:crypto");
  const hash=createHmac("sha256",key).update(email.trim().toLowerCase()).digest("hex");

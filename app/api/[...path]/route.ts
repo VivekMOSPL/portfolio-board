@@ -2,7 +2,7 @@ import { NextRequest,NextResponse } from "next/server";
 import { z,ZodError } from "zod";
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { account,authenticated,authClient,authThrottle,dbError,requireTenant,rpc,setSessionCookies } from "@/lib/server";
+import { account,authenticated,authClient,authThrottle,dbError,missingConfig,readEnv,requireTenant,rpc,setSessionCookies } from "@/lib/server";
 import { AppError,checkOrigin,filterInput,validateCommand,toCsv } from "@/lib/domain";
 
 export const runtime="nodejs";
@@ -27,7 +27,7 @@ const credentials=z.object({email:z.email(),password:z.string().min(1).max(256)}
 export async function GET(req:NextRequest,ctx:{params:Promise<{path:string[]}>}) {
  try {
   const path=(await ctx.params).path.join("/");
-  if(path==="health")return reply({status:"ok",service:"client-follow-up-board"});
+    if(path==="health"){const missing=missingConfig();return reply({status:"ok",service:"client-follow-up-board",configured:missing.length===0,missing});}
   const {db,user}=await authenticated();
   const ac=await account(db);
   if(path==="session")return reply({...ac,email:user.email});
@@ -96,7 +96,7 @@ export async function POST(req:NextRequest,ctx:{params:Promise<{path:string[]}>}
   if(path==="jobs/reminders"){
    const expected=process.env.CRON_SECRET,supplied=req.headers.get("authorization")?.replace(/^Bearer /,"")??"";
    if(!expected||supplied.length!==expected.length||!timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)))throw new AppError(401,"Unauthorized");
-   const key=process.env.SUPABASE_SERVICE_ROLE_KEY,url=process.env.NEXT_PUBLIC_SUPABASE_URL;
+   const key=readEnv("SUPABASE_SERVICE_ROLE_KEY"),url=readEnv("NEXT_PUBLIC_SUPABASE_URL");
    if(!key||!url)throw new AppError(503,"Background jobs are not configured");
    const db=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
    return reply({created:await rpc(db,"cb_reminders")});

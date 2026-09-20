@@ -11,12 +11,8 @@
 // present but empty, and re-running migrations over them fails with "already exists".
 // Dropping them is the correct recovery — but only when they hold no client records.
 
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
 import pg from "pg";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
 const FORCE = process.argv.includes("--force");
 
 const connectionString = process.env.DATABASE_URL;

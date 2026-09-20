@@ -47,3 +47,6 @@ backups/
 
 # One-time local credential handoff - never publish
 .admin-login.txt
+
+# Deployment variable handoff - never publish
+vercel-env.txt
