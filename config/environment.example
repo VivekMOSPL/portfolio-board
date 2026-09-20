@@ -9,3 +9,14 @@ CRON_SECRET=
 DATABASE_URL=
 # Only for one-time bootstrap:
 BOOTSTRAP_USER_ID=
+
+# Outbound transactional email. Not required for sign-in; required for invitations,
+# confirmations and password recovery. Values live only in .env.local and the host.
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
+SMTP_FROM_EMAIL=
+SMTP_FROM_NAME=
+# Optional: change the --send test recipient away from the sender address.
+SMTP_TEST_TO=

@@ -15,6 +15,8 @@
     "db:migrate": "node --env-file=.env.local scripts/apply-migrations.mjs",
     "db:bundle": "node scripts/bundle-migrations.mjs",
     "db:reset": "node --env-file=.env.local scripts/reset-schema.mjs",
+    "smtp:check": "node --env-file=.env.local scripts/verify-smtp.mjs",
+    "smtp:test": "node --env-file=.env.local scripts/verify-smtp.mjs --send",
     "go:live": "npm run check:ready && node --env-file=.env.local scripts/bootstrap-platform.mjs && npm run check:ready"
   },
   "dependencies": {
@@ -34,6 +36,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
+    "nodemailer": "^10.0.10",
     "pg": "^8.23.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.13",
