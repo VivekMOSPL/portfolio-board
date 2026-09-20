@@ -4,5 +4,8 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 APP_URL=http://localhost:3100
 CRON_SECRET=
+# Server-only. Supabase dashboard -> Connect -> Session pooler -> copy the URI and
+# replace [YOUR-PASSWORD]. Used only by npm run db:plan / db:migrate. Never expose it.
+DATABASE_URL=
 # Only for one-time bootstrap:
 BOOTSTRAP_USER_ID=

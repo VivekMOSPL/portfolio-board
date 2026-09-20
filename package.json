@@ -10,7 +10,9 @@
     "test": "node --import tsx --test tests/database.test.mjs tests/domain.test.ts tests/workbooks.test.ts",
     "typecheck": "tsc --noEmit",
     "test:browser": "node scripts/browser-smoke.mjs",
-    "check:ready": "node --env-file=.env.local scripts/check-ready.mjs"
+    "check:ready": "node --env-file=.env.local scripts/check-ready.mjs",
+    "db:plan": "node --env-file=.env.local scripts/apply-migrations.mjs --dry-run",
+    "db:migrate": "node --env-file=.env.local scripts/apply-migrations.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
@@ -29,6 +31,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
+    "pg": "^8.23.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.13",
     "typescript": "^5"
