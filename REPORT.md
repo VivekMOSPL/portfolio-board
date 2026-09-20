@@ -113,3 +113,109 @@ Do not run the old schema.sql/seed.sql. The new migration path retains legacy ro
 Read README.md for Auth templates, environment, bootstrap, scheduler, migration and backup instructions. Never provide keys in chat or commit .env.local.
 The local preview is http://localhost:3100/login while the started process remains running.
 Configure the missing server credential and migration access to unblock provider verification. Finish the source gaps above before claiming full master-brief completion.
+
+---
+
+# Addendum — 2026-09-20 (source published; hosting still blocked)
+
+This addendum is by a later session. Everything below is output this session actually produced.
+The paragraph above saying "The source upgrade is local and not deployed" is now half outdated: the
+source is published to a repository, but it is still not deployed and still cannot be signed in to.
+
+## Status per part
+
+Source published to its own repository: DONE
+  evidence: git init in portfolio-board, then `git push -u origin main` printed
+    "To https://github.com/VivekMOSPL/portfolio-board.git" and "* [new branch]  main -> main".
+  evidence: `gh api repos/VivekMOSPL/portfolio-board/git/trees/main?recursive=1` -> 66 entries, 54 files.
+  evidence: commit 04197c3, `gh api repos/VivekMOSPL/portfolio-board` -> pushed_at 2026-09-20T04:59:10Z,
+    default_branch main, visibility public. The repo was empty before this push (size 0, no branches),
+    so nothing was overwritten and no history was rewritten.
+  evidence: the remote tree contains app/portal.tsx, app/[section]/page.tsx, app/api/[...path]/route.ts,
+    lib/server.ts, lib/domain.ts, all five supabase/migrations files, tests/database.test.mjs and
+    scripts/bootstrap-platform.mjs. No `.env` path exists in the remote tree.
+
+Board untracked from the private parent repository: DONE (staged, intentionally not committed)
+  evidence: `git -C D:\Manav\fwai-starter ls-files portfolio-board` -> 24 before, 0 after.
+  evidence: files still on disk (19 top-level files in portfolio-board).
+  evidence: parent .gitignore gained "portfolio-board/"; parent HEAD remains 1031ac7.
+  A nested `.git` produced no embedded-repository warning in the parent; `git status` there still
+  reports its normal `## main...origin/main`.
+
+Local build and test suite re-verified: DONE
+  evidence: `npm test` -> "tests 33", "pass 33", "fail 0".
+  evidence: `npm run build` -> "Compiled successfully in 78s", "Finished TypeScript in 29.6s",
+    routes /, /_not-found, /[section], /api/[...path].
+  evidence: `npm run typecheck` -> no output, no errors. `npm run lint` -> no findings.
+
+Public and unauthenticated browser behaviour re-verified: DONE
+  evidence: `npm run test:browser` -> "desktop: HTTP 200, labelled login controls visible, no horizontal
+    overflow / tablet: ... / mobile: ... / Unauthenticated dashboard shows Sign in; no business records
+    rendered / HTTP checks: forged-origin POST 403; unauthenticated data 401; unknown page 404;
+    browser errors 0".
+  evidence: direct probe on the freshly built app -> unauthenticated /api/data HTTP 401;
+    /api/health HTTP 200 {"status":"ok","service":"client-follow-up-board"}.
+  evidence: security headers on /login -> X-Frame-Options DENY; Content-Security-Policy with
+    frame-ancestors 'none', object-src 'none', base-uri 'self'; X-Content-Type-Options nosniff;
+    Referrer-Policy no-referrer; Permissions-Policy camera=(), microphone=(), geolocation=().
+    Strict-Transport-Security was absent, which is expected over plain HTTP on localhost.
+
+Hosted activation and deployment: BLOCKED (unchanged)
+  Tried:      npm run check:ready
+  Got:        BLOCKED: missing server configuration: SUPABASE_SERVICE_ROLE_KEY
+  Wall:       The service-role credential is not present in .env.local, and no hosted Auth account has
+              been created. Migrations cannot be applied, the platform admin cannot be bootstrapped, and
+              no user can authenticate. Only the project owner can supply these.
+  To unblock: owner adds SUPABASE_SERVICE_ROLE_KEY privately to .env.local and to the deployment
+              environment, creates and verifies the first Auth account, and connects the deployment.
+
+Deployment: BLOCKED
+  Tried:      checked for Vercel credentials: .vercel link, VERCEL_TOKEN, %USERPROFILE%\.vercel\auth.json
+  Got:        .vercel link False; VERCEL_TOKEN not set; auth.json False
+  Wall:       No Vercel credential or project link exists on this machine, so no deploy can be issued
+              from here and project settings cannot be read.
+  Surviving state: https://portfolio-board-one.vercel.app/ still returns 7184 bytes on / and 404 on /login,
+              i.e. the unauthenticated prototype. The push did not change the live site.
+
+Reminder scheduling (n8n): BLOCKED
+  Tried:      n8n_list_credentials
+  Got:        2 credentials: "Google Sheets account" (googleSheetsOAuth2Api), "DeepSeek account" (deepSeekApi)
+  Wall:       POST /api/jobs/reminders requires an Authorization: Bearer header. No httpHeaderAuth
+              credential exists, and this tooling can list credentials but not create them. The endpoint
+              is also not deployed, so a workflow built now could neither run nor be verified.
+  To unblock: owner creates an httpHeaderAuth credential in idash.app.n8n.cloud named "IDash Board CRON"
+              with Header Name "Authorization" and value "Bearer <CRON_SECRET>", after the app is deployed.
+
+## Claims ledger (this session)
+
+- Public repo contents and commit: gh api trees + repo metadata -> 54 files, 04197c3, pushed_at above.
+- No credential published: recursive remote tree contains no `.env` path; a full-project scan for
+  JWT-shaped values (`eyJ...`) found only one hit, a base64 `integrity` hash in package-lock.json for
+  lightningcss-linux-x64-gnu, which is not a key.
+- Parent repo untracking: ls-files count 24 -> 0; parent HEAD unchanged at 1031ac7.
+- Local suite, build, typecheck, lint, browser smoke and security headers: outputs quoted above.
+- UNVERIFIED: hosted schema, hosted RLS behaviour, real provider authentication and email delivery,
+  authenticated browser journeys, tenant isolation on the hosted database, backup/restore, and the
+  deployed URL after any change. None of these have been observed.
+- Not done: no migration applied, no bootstrap executed, no deployment issued, no n8n workflow created,
+  no commit made in the parent repository.
+
+## What broke and how I fixed it
+
+- The public repository was an empty shell (size 0, no branches) rather than a populated prototype.
+  This removed the expected unrelated-histories problem, so a clean `git init` + first push was used
+  instead of any merge or force-push.
+- `portfolio-board` was not its own repository; `git rev-parse --show-toplevel` returned
+  `D:/Manav/fwai-starter`. A nested repository was created deliberately, and the parent was left
+  tracked-but-staged-for-untracking so its history was not rewritten.
+- Two `gh api` JSON pipelines failed with "Invalid JSON primitive: gh." while the repository had no
+  commits, because the API returns a non-JSON error for an empty repository. Re-run after the push.
+
+## What I would tell the next person
+
+Read this addendum before the sections above; the repository state has moved but the deployment has not.
+Do not redeploy the legacy prototype, and do not re-add its public policies as a shortcut.
+The public repository is public: confirm that is still intended before adding anything, and note that
+secret scanning and push protection are disabled on it.
+The single highest-value action is the owner adding SUPABASE_SERVICE_ROLE_KEY. Until that happens
+nothing hosted is verifiable, and no amount of further source work changes that.
