@@ -317,3 +317,33 @@ The operator console stores business name, type, plan and limits. It has no addr
 registered address the brief mentions is not collected there; business profile and timezone
 (~Asia/Kolkata by default) live in the tenant's own Business settings.
 
+
+---
+
+# Addendum 3 — 2026-09-21: outbound email verified, and the earlier SMTP conclusion corrected
+
+Addendum 2's commit message says the ZeptoMail token is "not accepted". That was wrong and is
+corrected here: the token is valid. The account has no sending credits.
+
+Verified through the provider's HTTP API, which shares the same token as SMTP:
+  POST https://api.zeptomail.com/v1.1/email  Authorization: Zoho-enczapikey <token>
+    -> HTTP 429 {"error":{"code":"TM_5001","details":[{"code":"LE_102",
+       "message":"Credit exhausted"}],"message":"Resource Limi..."}}
+  Same call without the "Zoho-enczapikey " prefix -> HTTP 401 SERR_157 Invalid API Token.
+  The .in and .eu API hosts -> HTTP 401 SERR_157, so this account lives in the US data centre
+  despite the .in sender domain.
+
+So the token authenticates, and the request is refused for billing rather than credentials.
+Consequences:
+  - No invitation, confirmation or recovery mail can be sent from this account until credits
+    are added. This is the cause of "unable to send invitation mail".
+  - SMTP still answers 535 Authentication Failed on smtp.zeptomail.com:587 and :465 even though
+    the same token authenticates over HTTP. That is consistent with the account being blocked
+    for sending; it must be re-tested with `npm run smtp:check` once credits exist.
+  - The header prefix is significant: `Zoho-enczapikey ` is required. A bare token is rejected.
+  - `npm test` does not cover email. Nothing in the application sends mail yet: the "Invite admin"
+    action correctly labels its output "Invitation created for manual delivery", because
+    invitation dispatch is an unimplemented P0 item, not a configured one.
+
+The settings themselves are correct and recorded in .env.local: host smtp.zeptomail.com, port 587,
+user emailapikey, sender "Support -IDash <support@datachron.in>", EnableSsl true.
