@@ -219,3 +219,101 @@ The public repository is public: confirm that is still intended before adding an
 secret scanning and push protection are disabled on it.
 The single highest-value action is the owner adding SUPABASE_SERVICE_ROLE_KEY. Until that happens
 nothing hosted is verifiable, and no amount of further source work changes that.
+
+---
+
+# Addendum 2 — 2026-09-20/21: hosted activation COMPLETE, authenticated journey VERIFIED
+
+The blocker in Addendum 1 is cleared. The schema is live on the hosted project and a real
+authenticated journey has been exercised in a browser.
+
+## Status per part
+
+Hosted schema applied: DONE
+  evidence: `npm run db:migrate` -> five lines "ok  20260917000X_*.sql", then
+    "DONE: 5 applied, 0 already present."
+  evidence: `npm run check:ready` -> "Database schema readiness: HTTP 200 for all required tables."
+  The connection reported "connected: db=postgres user=postgres postgres=17.6".
+
+Platform administrator provisioned: DONE
+  evidence: `npm run go:live` ->
+    "Database schema readiness: HTTP 200 for all required tables."
+    "Platform administrator provisioned for the supplied verified user ID. No client data was read."
+    "Database schema readiness: HTTP 200 for all required tables."
+
+Authenticated journey in a real browser: DONE
+  evidence: `node scripts/verify-auth.mjs` ->
+    "signed in, landed on /dashboard"
+    "session cookies: cb_access(secure=true,httpOnly=true), cb_refresh(secure=true,httpOnly=true)"
+    "browser errors: 0"
+    "AUTHENTICATED JOURNEY VERIFIED"
+  The platform administrator lands on Platform administration with the Super Admin badge, an
+  empty "Subscribed businesses" panel and the prompt "Create the first business and invite its
+  administrator." Screenshot: artifacts/auth-platform.png.
+
+First tenant created through the product UI: DONE
+  evidence: filled the platform create-business form and saved -> "Saved successfully."
+    Row after save: "IDash — Datachron Solutions   other · Starter · trial
+    0 / 10 users · 0 / 1000 clients · 0 follow-ups   Manage   Invite admin
+    1–1 of 1 records".
+    Screenshot: artifacts/platform-after-create.png.
+
+Invitation issued and accepted: DONE
+  evidence: "Invite admin" -> "Invitation created for manual delivery. Share this single-use link
+    securely: http://localhost:3100/invite?token=..." (shown once, as designed; email is not
+    configured, so the UI correctly says manual delivery rather than claiming an email was sent).
+  evidence: signed in as the invited address and accepted -> the workspace becomes
+    "IDash — Datachron Solutions" with role admin and the account name "IDash Business Admin".
+
+Role scoping: DONE
+  evidence: platform administrator link set is exactly
+    /dashboard /notifications /platform /privacy /terms
+  evidence: business administrator link set is exactly
+    Overview, My day, Follow-ups, Clients & prospects, Calendar, Team, Imports, Reports,
+    Notifications, Audit trail, Business settings, Profile & security
+  evidence: business administrator opening /platform shows no "Subscribed businesses" panel and
+    no "Super Admin" badge - the platform console is not reachable.
+
+Tenant isolation through the API: DONE
+  evidence: as the business administrator of the first tenant, calling
+    /api/data?resource=clients&tenant=11111111-1111-4111-8111-111111111111
+    returned HTTP 403 {"error":"Account disabled, business suspended, or access unavailable"}.
+
+## How the hosted blocker was actually cleared
+
+The SQL editor was the problem, not the SQL. Applying supabase/apply-all.sql through the dashboard
+left 19 tables present and 13 functions missing: the statements were executed individually, so the
+migrations' own begin;/commit; wrappers did not make them atomic. Re-running then failed on
+"relation cb_tenants already exists".
+
+Root cause of the connection difficulty: the project's direct database host
+db.qmrkbqsqwzaeergwhofc.supabase.co publishes only an AAAA record, and this workstation has no IPv6
+egress, so the direct string could never connect. The project is hosted in ap-northeast-2; the
+working URI is the session pooler at
+aws-0-ap-northeast-2.pooler.supabase.com:5432 with username postgres.qmrkbqsqwzaeergwhofc.
+The region was found by sweeping every aws-0/aws-1 pooler host in parallel; the ones that answer
+"tenant/user ... not found" are the wrong region.
+
+Recovery, both built and run from the repository:
+  npm run db:reset   -> dropped 19 cb_ tables and 17 cb_ functions; legacy public.followups
+                        left untouched at 18 rows; refused nothing because no client rows existed
+  npm run db:migrate -> applied all five migrations atomically, recording checksums in
+                        cb_schema_migrations so a re-run skips rather than fails
+
+## Claims ledger (this addendum)
+
+- Hosted schema, readiness, bootstrap, browser sign-in, tenant creation, invitation acceptance,
+  role scoping and cross-tenant denial: commands and outputs quoted above.
+- UNVERIFIED still: provider-backed email delivery (no provider configured), scheduled reminder
+  execution, backup/restore rehearsal, deployed-URL behaviour, and performance at volume.
+- The deployment itself has NOT happened. Nothing was deployed by this session.
+
+## What I would tell the next person
+
+Prefer `npm run db:migrate` over the dashboard SQL editor for this schema. The editor applies the
+statements one at a time and will leave a half-built schema that then refuses to rebuild.
+`npm run db:reset` is the recovery, and it is safe only while cb_ tables hold no client records.
+The operator console stores business name, type, plan and limits. It has no address field, so the
+registered address the brief mentions is not collected there; business profile and timezone
+(~Asia/Kolkata by default) live in the tenant's own Business settings.
+
