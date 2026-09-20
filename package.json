@@ -12,7 +12,8 @@
     "test:browser": "node scripts/browser-smoke.mjs",
     "check:ready": "node --env-file=.env.local scripts/check-ready.mjs",
     "db:plan": "node --env-file=.env.local scripts/apply-migrations.mjs --dry-run",
-    "db:migrate": "node --env-file=.env.local scripts/apply-migrations.mjs"
+    "db:migrate": "node --env-file=.env.local scripts/apply-migrations.mjs",
+    "db:bundle": "node scripts/bundle-migrations.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

@@ -42,3 +42,8 @@ next-env.d.ts
 
 # Local data backups - may contain client information, never publish
 backups/
+
+
+
+# One-time local credential handoff - never publish
+.admin-login.txt
