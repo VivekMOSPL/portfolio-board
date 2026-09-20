@@ -1,0 +1,10 @@
+import {createClient} from "@supabase/supabase-js";
+const required=["NEXT_PUBLIC_SUPABASE_URL","SUPABASE_SERVICE_ROLE_KEY","BOOTSTRAP_USER_ID"];
+for(const name of required)if(!process.env[name])throw new Error("Missing "+name);
+if(!/^[0-9a-f-]{36}$/i.test(process.env.BOOTSTRAP_USER_ID))throw new Error("BOOTSTRAP_USER_ID must be an existing verified Supabase Auth user UUID");
+const db=createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
+const {data,error:authError}=await db.auth.admin.getUserById(process.env.BOOTSTRAP_USER_ID);
+if(authError||!data.user?.email_confirmed_at)throw new Error("Bootstrap user must exist and have a verified email");
+const {error}=await db.from("cb_platform_admins").upsert({user_id:data.user.id});
+if(error)throw new Error("Platform bootstrap failed: "+error.code);
+console.log("Platform administrator provisioned for the supplied verified user ID. No client data was read.");

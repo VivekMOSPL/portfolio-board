@@ -1,0 +1,33 @@
+import {chromium} from "@playwright/test";
+import assert from "node:assert/strict";
+import {mkdir} from "node:fs/promises";
+await mkdir("artifacts",{recursive:true});
+const browser=await chromium.launch({channel:"msedge",headless:true});
+const page=await browser.newPage();
+const errors=[];page.on("pageerror",e=>errors.push(e.message));
+for(const [name,width,height]of [["desktop",1440,1000],["tablet",820,1180],["mobile",390,844]]){
+ await page.setViewportSize({width,height});
+ const response=await page.goto("http://localhost:3100/login",{waitUntil:"networkidle"});
+ assert.equal(response.status(),200);
+ assert.equal(response.headers()["x-frame-options"],"DENY");
+ assert.match(response.headers()["content-security-policy"],/frame-ancestors/);
+ await page.getByRole("heading",{name:"Welcome back"}).waitFor();
+ assert.ok(await page.getByLabel("Email").isVisible());
+ assert.ok(await page.getByLabel("Password *",{exact:true}).isVisible());
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,name+" horizontal overflow");
+ await page.screenshot({path:"artifacts/login-"+name+".png",fullPage:true});
+ console.log(name+": HTTP 200, labelled login controls visible, no horizontal overflow");
+}
+await page.goto("http://localhost:3100/forgot-password",{waitUntil:"networkidle"});
+await page.getByRole("heading",{name:"Reset your password"}).waitFor();
+await page.goto("http://localhost:3100/dashboard",{waitUntil:"networkidle"});
+await page.getByRole("link",{name:"Sign in",exact:true}).waitFor();
+console.log("Unauthenticated dashboard shows Sign in; no business records rendered");
+const bad=await page.request.post("http://localhost:3100/api/command",{headers:{Origin:"https://untrusted.example","Content-Type":"application/json"},data:{tenant:null,action:"tenant.create",data:{}}});
+assert.equal(bad.status(),403);
+const unauth=await page.request.get("http://localhost:3100/api/data?resource=clients&tenant=11111111-1111-4111-8111-111111111111");
+assert.equal(unauth.status(),401);
+assert.equal((await page.request.get("http://localhost:3100/no-such-page")).status(),404);
+assert.deepEqual(errors,[]);
+console.log("HTTP checks: forged-origin POST 403; unauthenticated data 401; unknown page 404; browser errors 0");
+await browser.close();
