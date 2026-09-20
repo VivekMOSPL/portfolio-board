@@ -14,6 +14,7 @@
     "db:plan": "node --env-file=.env.local scripts/apply-migrations.mjs --dry-run",
     "db:migrate": "node --env-file=.env.local scripts/apply-migrations.mjs",
     "db:bundle": "node scripts/bundle-migrations.mjs",
+    "db:reset": "node --env-file=.env.local scripts/reset-schema.mjs",
     "go:live": "npm run check:ready && node --env-file=.env.local scripts/bootstrap-platform.mjs && npm run check:ready"
   },
   "dependencies": {
