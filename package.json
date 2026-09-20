@@ -13,7 +13,8 @@
     "check:ready": "node --env-file=.env.local scripts/check-ready.mjs",
     "db:plan": "node --env-file=.env.local scripts/apply-migrations.mjs --dry-run",
     "db:migrate": "node --env-file=.env.local scripts/apply-migrations.mjs",
-    "db:bundle": "node scripts/bundle-migrations.mjs"
+    "db:bundle": "node scripts/bundle-migrations.mjs",
+    "go:live": "npm run check:ready && node --env-file=.env.local scripts/bootstrap-platform.mjs && npm run check:ready"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
