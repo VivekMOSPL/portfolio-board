@@ -17,12 +17,14 @@
     "db:reset": "node --env-file=.env.local scripts/reset-schema.mjs",
     "smtp:check": "node --env-file=.env.local scripts/verify-smtp.mjs",
     "smtp:test": "node --env-file=.env.local scripts/verify-smtp.mjs --send",
+    "mail:verify": "node --import tsx scripts/verify-invite-email.mjs",
     "go:live": "npm run check:ready && node --env-file=.env.local scripts/bootstrap-platform.mjs && npm run check:ready"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
     "exceljs": "^4.4.0",
     "next": "16.3.5",
+    "nodemailer": "^10.0.10",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "zod": "^4.6.5"
@@ -32,11 +34,11 @@
     "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/nodemailer": "^8.0.2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
-    "nodemailer": "^10.0.10",
     "pg": "^8.23.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.13",

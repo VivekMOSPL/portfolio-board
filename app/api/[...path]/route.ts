@@ -3,6 +3,7 @@ import { z,ZodError } from "zod";
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { account,authenticated,authClient,authThrottle,dbError,missingConfig,readEnv,requireTenant,rpc,setSessionCookies } from "@/lib/server";
+import { mailConfigured, sendInvitationEmail } from "@/lib/mail";
 import { AppError,checkOrigin,filterInput,validateCommand,toCsv } from "@/lib/domain";
 
 export const runtime="nodejs";
@@ -30,7 +31,7 @@ export async function GET(req:NextRequest,ctx:{params:Promise<{path:string[]}>})
     if(path==="health"){const missing=missingConfig();return reply({status:"ok",service:"client-follow-up-board",configured:missing.length===0,missing});}
   const {db,user}=await authenticated();
   const ac=await account(db);
-  if(path==="session")return reply({...ac,email:user.email});
+    if(path==="session")return reply({...ac,email:user.email,mail_configured:mailConfigured()});
   const resource=req.nextUrl.searchParams.get("resource")??"followups";
   const tenant=req.nextUrl.searchParams.get("tenant")??"";
   const page=z.coerce.number().int().min(1).max(100000).parse(req.nextUrl.searchParams.get("page")??1);
@@ -162,7 +163,20 @@ export async function POST(req:NextRequest,ctx:{params:Promise<{path:string[]}>}
    if(!["tenant.create","tenant.update","plan.create","invite.accept"].includes(envelope.action)&&!(ac.platform&&["invite.create","invite.revoke"].includes(envelope.action))){
     requireTenant(ac,uuid.parse(envelope.tenant));
    }
-   return reply(await rpc(db,"cb_command",{p_tenant:envelope.tenant,p_action:envelope.action,p_data:parsed}));
+   const result=await rpc(db,"cb_command",{p_tenant:envelope.tenant,p_action:envelope.action,p_data:parsed});
+   // An invitation is created first and emailed second. If mail is not configured, or the provider
+   // refuses the message, the invitation still stands and the caller is told so plainly rather than
+   // being told an email was sent. The one-time link is returned either way.
+   if(envelope.action==="invite.create"&&result&&typeof result.token==="string"){
+    const invited=parsed as {email:string;name:string;role:string};
+    const business=ac.memberships.find(m=>m.tenant_id===envelope.tenant)?.tenant_name??null;
+    const link=new URL("/invite?token="+encodeURIComponent(result.token),readEnv("APP_URL")??req.url).href;
+    const mail=await sendInvitationEmail({to:invited.email,name:invited.name,business,role:invited.role,link,expiresInHours:48});
+    return reply(mail.sent
+      ?{...result,delivery:"email",delivered_to:invited.email}
+      :{...result,delivery:"manual",delivery_reason:mail.reason});
+   }
+   return reply(result);
   }
   throw new AppError(404,"Not found");
  }catch(err){return failure(err);}
