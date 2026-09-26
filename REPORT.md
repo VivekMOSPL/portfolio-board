@@ -347,3 +347,23 @@ Consequences:
 
 The settings themselves are correct and recorded in .env.local: host smtp.zeptomail.com, port 587,
 user emailapikey, sender "Support -IDash <support@datachron.in>", EnableSsl true.
+
+
+---
+
+# Addendum 4 — 2026-09-26: SMTP re-verified after the send-token and sender change
+
+The deployment handoff (vercel-env.txt) was changed to a new ZeptoMail send token and the sender
+to "Support -IDash <mail@moneyoptions.in>". Re-tested with `npm run smtp:check` after overriding
+the local values with the handoff ones:
+
+  connection + STARTTLS + authentication : OK
+  Credentials are valid. Re-run with --send to deliver one test message.
+
+So the new credential authenticates; the Addendum 3 credit exhaustion no longer blocks SMTP
+authentication. `.env.local` still carries the previous credential and sender and fails with
+535 Authentication Failed until it is synced.
+
+Neither `.env.local` nor `vercel-env.txt` is tracked (both gitignored): the credential must never
+be committed. The application reads mail configuration at runtime, so the new values have to be
+set in the Vercel project environment and the app redeployed before production mail uses them.

@@ -16,4 +16,5 @@ Checked dependencies -> npm audit --omit=dev -> found 0 vulnerabilities after pa
 Checked diff and secret boundaries -> git diff --check; git check-ignore .env.local; node --env-file=.env.local scripts/check-browser-secrets.mjs -> no diff errors (LF/CRLF notices only); .env.local; PASS configured server secret values absent from .next/static, checked 1 configured secret.
 Configured local APP_URL and generated CRON_SECRET without printing values -> npm run check:ready -> BLOCKED: missing server configuration: SUPABASE_SERVICE_ROLE_KEY.
 Attempted optional retirement of legacy SQL entry point -> approved-command review -> rejected because AGENTS prohibits changing pre-existing files; no retry/workaround; originals retained and migration path documented.
+Re-verified SMTP after the send-token/sender change -> npm run smtp:check with vercel-env.txt values overriding .env.local -> host smtp.zeptomail.com:587, from "Support -IDash <mail@moneyoptions.in>", connection + STARTTLS + authentication : OK. .env.local still fails 535 (stale, old credential/sender).
 
