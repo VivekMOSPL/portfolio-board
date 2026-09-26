@@ -401,3 +401,27 @@ Evidence:
 The real unblock for that invitation is still an account for the invited address: register or sign
 in as vivek@mospl.com, then reopen the link. The server now names that address instead of saying
 "expired".
+
+
+---
+
+# Addendum 6 — 2026-09-26: the invitation page no longer dead-ends when signed out
+
+Clicking Accept on /invite while signed out returned "Please sign in" (lib/server.ts:23), because
+the page rendered the accept form with no session and its "Sign in in a new tab" / "Create account"
+links dropped the token, so returning produced a dead end.
+
+Change (app/portal.tsx): the invite page now reads /api/session.
+  - signed out: offers "Sign in to accept" and "Create an account", both carrying
+    /login?next=/invite?token=<token> (and /register?next=...), and does not render the accept button.
+  - signed in: renders the accept form and names the signed-in address; a mismatch is named by the
+    server (Addendum 5).
+  - login and register honour ?next= (relative paths only, so it cannot redirect off-site) and
+    return to the invitation afterwards.
+
+Evidence:
+  npm run lint; npm run typecheck; npm run build -> clean; Compiled successfully in 58s
+  npm run test:browser -> "Signed-out invite offers Sign in to accept and keeps the token in the
+    sign-in link"; forged-origin POST 403; unauthenticated data 401; unknown page 404; browser errors 0
+
+The accept step still needs an account for the invited address, as in Addendum 5.

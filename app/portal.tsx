@@ -99,18 +99,27 @@ const tenantFields:Field[]=[
 function Auth({section}:{section:string}) {
  const params=useSearchParams(),router=useRouter();
  const [message,setMessage]=useState("");
+ const session=useApi<Account&{email:string}>(section==="invite"?"/api/session":null);
+ const token=params.get("token")||"";
+ const requestedNext=params.get("next")||"";
+ const safeNext=requestedNext.startsWith("/")&&!requestedNext.startsWith("//")?requestedNext:"";
+ const invitePath="/invite"+(token?"?token="+encodeURIComponent(token):"");
+ const carry=safeNext||(token?invitePath:"");
+ const signInHref=carry?"/login?next="+encodeURIComponent(carry):"/login";
+ const createHref=carry?"/register?next="+encodeURIComponent(carry):"/register";
+ const signedIn=Boolean(session.data);
  const password={name:"password",label:"Password",type:"password",required:true};
  const email={name:"email",label:"Email",type:"email",required:true};
  const title:Record<string,string>={login:"Welcome back",register:"Create your account","forgot-password":"Reset your password","reset-password":"Choose a new password",confirm:"Confirm your email",invite:"Accept your invitation"};
  return <main className="auth"><div className="auth-story"><Link href="/login" className="brand"><span>F</span> Follow-through</Link><div><p className="eyebrow">CLIENT FOLLOW-UP BOARD</p><h1>Every commitment.<br/>A clear next step.</h1><p>One workspace for your clients, your team, and the conversations that matter.</p></div><p className="muted">Built for advisory businesses.</p></div>
  <section className="auth-form"><p className="eyebrow">YOUR SECURE WORKSPACE</p><h2>{title[section]||"Sign in"}</h2><p className="muted">Client commitments and follow-ups requiring action.</p>
  {message&&<Notice>{message}</Notice>}
- {section==="login"&&<><Form fields={[email,password]} submit="Sign in" onSubmit={async d=>{await api("/api/auth/login",{method:"POST",body:JSON.stringify(d)});router.replace("/dashboard");router.refresh();}}/><Link href="/forgot-password">Forgot your password?</Link><p>Invited to a business? <Link href="/register">Create an account</Link>, then reopen your invitation.</p></>}
- {section==="register"&&<Form fields={[email,{...password,hint:"Use at least 12 characters."}]} submit="Create account" onSubmit={d=>api("/api/auth/signup",{method:"POST",body:JSON.stringify(d)})}/>}
+ {section==="login"&&<><Form fields={[email,password]} submit="Sign in" onSubmit={async d=>{await api("/api/auth/login",{method:"POST",body:JSON.stringify(d)});router.replace(safeNext||"/dashboard");router.refresh();}}/><Link href="/forgot-password">Forgot your password?</Link><p>Invited to a business? <Link href={createHref}>Create an account</Link>, then reopen your invitation.</p></>}
+ {section==="register"&&<><Form fields={[email,{...password,hint:"Use at least 12 characters."}]} submit="Create account" onSubmit={d=>api("/api/auth/signup",{method:"POST",body:JSON.stringify(d)})}/>{carry&&<p>After confirming your email, <Link href={signInHref}>sign in to accept your invitation</Link>.</p>}</>}
  {section==="forgot-password"&&<Form fields={[email]} submit="Request recovery email" onSubmit={d=>api("/api/auth/forgot",{method:"POST",body:JSON.stringify(d)})}/>}
  {section==="reset-password"&&<Form fields={[{name:"token_hash",label:"Recovery code",required:true,hint:"Prefilled from your recovery email. Ask your administrator if it is missing."},{...password,hint:"At least 12 characters."}]} values={{token_hash:params.get("token_hash")||""}} submit="Reset password" onSubmit={async d=>{await api("/api/auth/confirm",{method:"POST",body:JSON.stringify({token_hash:d.token_hash,type:"recovery"})});return api("/api/auth/password",{method:"POST",body:JSON.stringify({password:d.password})});}}/>}
  {section==="confirm"&&<Form fields={[{name:"token_hash",label:"Confirmation code",required:true}]} values={{token_hash:params.get("token_hash")||""}} submit="Confirm email" onSubmit={async d=>{await api("/api/auth/confirm",{method:"POST",body:JSON.stringify({...d,type:"email"})});setMessage("Email confirmed. You can now open your invitation.");return {message:"Account confirmed."};}}/>}
- {section==="invite"&&<><Notice>Sign in with the invited email address before accepting. Invitations expire after 48 hours and can be used once.</Notice><Form fields={[{name:"token",label:"Invitation token",required:true}]} values={{token:params.get("token")||""}} submit="Accept invitation" onSubmit={async d=>{const result=await api("/api/command",{method:"POST",body:JSON.stringify({tenant:null,action:"invite.accept",data:d})});router.replace("/dashboard?tenant="+result.tenant_id);router.refresh();}}/><Link href="/login" target="_blank">Sign in in a new tab</Link> · <Link href="/register" target="_blank">Create account</Link></>}
+ {section==="invite"&&(session.loading?<Loading/>:session.error&&session.status!==401?<Notice error>{session.error}</Notice>:!signedIn?<><Notice>Open this invitation while signed in as the address it was sent to. Invitations expire after 48 hours and can be used once.</Notice><div className="button-row"><Link className="button primary" href={signInHref}>Sign in to accept</Link><Link className="button" href={createHref}>Create an account</Link></div></>:<><Notice>Signed in as {s(session.data?.email)}. Accepting adds that account to the business that sent this invitation.</Notice><Form fields={[{name:"token",label:"Invitation token",required:true}]} values={{token}} submit="Accept invitation" onSubmit={async d=>{const result=await api("/api/command",{method:"POST",body:JSON.stringify({tenant:null,action:"invite.accept",data:d})});router.replace("/dashboard?tenant="+result.tenant_id);router.refresh();}}/><p className="muted">Not {s(session.data?.email)}? <Link href={signInHref}>Sign in with another account</Link>.</p></>)}
  {section!=="login"&&<p><Link href="/login">Back to sign in</Link></p>}
  <footer><Link href="/privacy">Privacy</Link> · <Link href="/terms">Terms</Link></footer>
  </section></main>;
