@@ -368,3 +368,36 @@ printed `connection + STARTTLS + authentication : OK`.
 Neither `.env.local` nor `vercel-env.txt` is tracked (both gitignored): the credential must never
 be committed. The application reads mail configuration at runtime, so the new values have to be
 set in the Vercel project environment and the app redeployed before production mail uses them.
+
+
+---
+
+# Addendum 5 — 2026-09-26: a valid invitation no longer reports "expired"
+
+An invitation was emailed, but accepting it while signed in as a different account showed
+"Invitation is invalid, expired, or already used" although the row was valid:
+  invited vivek@mospl.com, created 2026-09-26T04:56:04Z, expires 2026-09-28, used_at/revoked_at null,
+  while auth.users held only connect@datachron.in and connect+admin@datachron.in.
+
+Cause: the invite.accept branch tested the invited email inside the same WHERE clause as the token,
+so a signed-in email mismatch and a bad token produced one generic message.
+
+Fix (migration 202609260006_invite_accept_identity.sql): a cb_command wrapper resolves the token
+first and, when it is valid but the caller is signed in as somebody else, raises
+"Sign in as <email> to accept this invitation" (42501). A genuinely unknown, expired or already-used
+token keeps the generic message, and the accept path itself is unchanged: it delegates to the
+previous definition (cb_command_prev), which is no longer directly executable.
+
+Evidence:
+  node --import tsx --test tests/database.test.mjs  -> tests 25; pass 25; fail 0
+    (the mismatch case now asserts /Sign in as invitee@example.test/, a bogus token asserts /invalid/)
+  npm test                                          -> tests 33; pass 33; fail 0
+  npm run lint; npm run typecheck                   -> no findings
+  npm run db:migrate                                -> applying 202609260006...; DONE: 1 applied, 5 already present
+  hosted pg_get_functiondef(cb_command)             -> contains "Sign in as % to accept" and cb_command_prev();
+                                                       authenticated can execute cb_command, not cb_command_prev
+  cb_schema_migrations                              -> 202609260006_invite_accept_identity.sql @ 2026-09-26T05:06:10Z
+
+The real unblock for that invitation is still an account for the invited address: register or sign
+in as vivek@mospl.com, then reopen the link. The server now names that address instead of saying
+"expired".

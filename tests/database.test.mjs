@@ -165,8 +165,9 @@ test("real PostgreSQL schema, RLS, transactions and workflows", async (t) => {
  });
  await t.test("invitation is email-bound, single-use and token hash is private",async()=>{
   const invite=await command(a.id,"invite.create",{email:"invitee@example.test",name:"New RM",role:"rm",team_id:g1});
-  await as("otherRm");await assert.rejects(command(null,"invite.accept",{token:invite.token}),/invalid/);
-  await as("invitee");await command(null,"invite.accept",{token:invite.token});
+  await as("otherRm");await assert.rejects(command(null,"invite.accept",{token:invite.token}),/Sign in as invitee@example\.test/);
+  await as("invitee");await assert.rejects(command(null,"invite.accept",{token:"a".repeat(72)}),/invalid/);
+  await command(null,"invite.accept",{token:invite.token});
   await assert.rejects(command(null,"invite.accept",{token:invite.token}),/invalid/);
   assert.equal((await db.query("select cb_session() s")).rows[0].s.memberships[0].role,"rm");
  });

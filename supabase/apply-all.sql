@@ -10,12 +10,13 @@
 -- The ledger block at the end records what ran, so a later `npm run db:migrate`
 -- skips these instead of failing on already-created tables.
 --
--- Bundled migrations: 5
+-- Bundled migrations: 6
 --   202609170001_schema.sql  sha256:5e4d9ccf33c9c35d
 --   202609170002_commands.sql  sha256:02ebafadbc49ec43
 --   202609170003_queries_jobs.sql  sha256:aa5db2c25ccd4569
 --   202609170004_session_security.sql  sha256:248660b37c336c63
 --   202609180005_operations.sql  sha256:acd82083e7c24c39
+--   202609260006_invite_accept_identity.sql  sha256:9715d5d8ec366973
 -- ============================================================
 
 -- ============================================================
@@ -615,6 +616,39 @@ revoke all on function cb_usage() from public,anon,authenticated;
 grant execute on function cb_usage() to authenticated;
 commit;
 
+
+-- ============================================================
+-- 202609260006_invite_accept_identity.sql
+-- sha256:9715d5d8ec366973
+-- ============================================================
+
+begin;
+-- An invitation is bound to the invited email. The single generic error made a signed-in email
+-- mismatch look like an expired token. Keep the generic message for a token that is genuinely
+-- unknown, expired or already used, and name the required account when the token is valid but
+-- the caller is signed in as somebody else.
+alter function cb_command(uuid,text,jsonb) rename to cb_command_prev;
+create function cb_command(p_tenant uuid,p_action text,p_data jsonb default '{}') returns jsonb
+language plpgsql security definer set search_path=public as $$
+declare invited_email text;
+begin
+ if not cb_access_valid() then raise exception 'Authentication required' using errcode='28000';end if;
+ if p_action='invite.accept' then
+  select email into invited_email from cb_invitations
+  where token_hash=encode(sha256(convert_to(p_data->>'token','UTF8')),'hex')
+  and used_at is null and revoked_at is null and expires_at>now();
+  if invited_email is not null and lower(invited_email)<>lower(coalesce(auth.jwt()->>'email','')) then
+   raise exception 'Sign in as % to accept this invitation', invited_email using errcode='42501';
+  end if;
+ end if;
+ return cb_command_prev(p_tenant,p_action,p_data);
+end$$;
+-- The previous definition must not stay directly callable.
+revoke execute on function cb_command_prev(uuid,text,jsonb) from authenticated,anon,public;
+revoke all on function cb_command(uuid,text,jsonb) from public,anon,authenticated;
+grant execute on function cb_command(uuid,text,jsonb) to authenticated;
+commit;
+
 -- ============================================================
 -- Ledger: record what was applied so tools can skip it safely.
 -- ============================================================
@@ -632,5 +666,6 @@ insert into cb_schema_migrations (version, checksum) values ('202609170002_comma
 insert into cb_schema_migrations (version, checksum) values ('202609170003_queries_jobs.sql', 'aa5db2c25ccd4569') on conflict (version) do nothing;
 insert into cb_schema_migrations (version, checksum) values ('202609170004_session_security.sql', '248660b37c336c63') on conflict (version) do nothing;
 insert into cb_schema_migrations (version, checksum) values ('202609180005_operations.sql', 'acd82083e7c24c39') on conflict (version) do nothing;
+insert into cb_schema_migrations (version, checksum) values ('202609260006_invite_accept_identity.sql', '9715d5d8ec366973') on conflict (version) do nothing;
 
 commit;
