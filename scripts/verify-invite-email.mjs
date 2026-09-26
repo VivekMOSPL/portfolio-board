@@ -71,7 +71,7 @@ process.env.SMTP_PASSWORD = "password";
 process.env.SMTP_FROM_EMAIL = "no-reply@example.test";
 process.env.SMTP_FROM_NAME = "Follow-through";
 
-const { mailConfigured, sendInvitationEmail } = await import("../lib/mail.ts");
+const { mailConfigured, sendInvitationEmail, sendRecoveryEmail } = await import("../lib/mail.ts");
 
 console.log("=== configuration ===");
 console.log(`  mailConfigured(): ${mailConfigured()}`);
@@ -115,8 +115,22 @@ assert.ok(decoded.includes("48 hours"), "the decoded message must state the expi
 assert.ok(/Content-Type:\s*text\/plain/i.test(raw), "a plain-text part must be present");
 assert.ok(/Content-Type:\s*text\/html/i.test(raw), "an HTML part must be present");
 assert.ok(decoded.includes("Accept your invitation"), "the message must carry a clear call to action");
-assert.ok(decoded.toLowerCase().includes("create an account") || decoded.toLowerCase().includes("create one"), "the message must explain how a new invitee gets an account");
+assert.ok(decoded.toLowerCase().includes("choose a password") || decoded.toLowerCase().includes("existing password"), "the message must explain how a new invitee gets access");
 console.log("  decoded message verified: recipient, sender, intact link, business, expiry, text + HTML parts, CTA and account guidance");
+
+console.log("=== path 1b: recovery message ===");
+captured.length = 0;
+const recoveryLink = "https://example.test/reset-password?token_hash=" + "a".repeat(56);
+const recovery = await sendRecoveryEmail({ to: "invitee@example.test", link: recoveryLink, expiresInHours: 1 });
+console.log(`  result: ${JSON.stringify(recovery)}`);
+assert.equal(recovery.sent, true, "a configured server must report sent:true for recovery");
+assert.equal(captured.length, 1, "expected exactly one captured recovery message");
+const decodedRecovery = decodeQuotedPrintable(captured[0]);
+assert.ok(decodedRecovery.includes(recoveryLink), "the recovery link must survive intact");
+assert.ok(/reset your follow-through password/i.test(decodedRecovery), "the recovery message must state its purpose");
+assert.ok(/expires in 1 hour/i.test(decodedRecovery), "the recovery message must state the expiry");
+assert.ok(/Content-Type:\s*text\/html/i.test(captured[0]), "the recovery message must carry an HTML part");
+console.log("  recovery message verified: recipient, intact link, purpose, expiry and HTML part");
 
 console.log("=== path 2: provider unreachable ===");
 process.env.SMTP_HOST = "127.0.0.1";

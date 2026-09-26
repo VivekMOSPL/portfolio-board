@@ -45,22 +45,16 @@ export function mailConfigured(): boolean {
 
 export type MailResult = { sent: true } | { sent: false; reason: string };
 
+const esc = (value: string) =>
+  value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+
 /**
- * Sends an invitation. A failure is returned, never thrown: the invitation row already exists and
- * the administrator must still be given the link, so a mail outage degrades to manual delivery
- * instead of losing the invitation or reporting a false success.
+ * One delivery path for every message. A failure is returned, never thrown: the caller decides how
+ * to degrade (an invitation still stands and its link is shown; a recovery request stays generic).
  */
-export async function sendInvitationEmail(input: {
-  to: string;
-  name: string;
-  business: string | null;
-  role: string;
-  link: string;
-  expiresInHours: number;
-}): Promise<MailResult> {
+async function deliver(to: string, subject: string, text: string, html: string): Promise<MailResult> {
   const config = mailConfig();
   if (!config) return { sent: false, reason: "Email is not configured on this server." };
-
   const transport = nodemailer.createTransport({
     host: config.host,
     port: config.port,
@@ -71,45 +65,8 @@ export async function sendInvitationEmail(input: {
     greetingTimeout: 15000,
     socketTimeout: 20000,
   });
-
-  const place = input.business ?? "Follow-through";
-  const subject = `You are invited to join ${place}`;
-  const body = [
-    `Hello ${input.name},`,
-    "",
-    `${place} has invited you to join Follow-through as ${input.role}.`,
-    "",
-    "Open this link to accept:",
-    input.link,
-    "",
-    `You do not need to be signed in yet. If you already have an account for ${input.to}, sign in when the page asks.`,
-    `If you do not, the link lets you create one with ${input.to}. Then accept the invitation.`,
-    `It expires in ${input.expiresInHours} hours and can be used once.`,
-    "",
-    "If you were not expecting this, you can ignore this message.",
-  ].join("\n");
-  const esc = (value: string) => value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
-  const html = [
-    `<!doctype html><html><body style="margin:0;padding:24px;background:#f4f6f9;font-family:Arial,'Segoe UI',sans-serif;color:#172536">`,
-    `<div style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e1e7ed;border-radius:12px;padding:32px">`,
-    `<p style="margin:0 0 6px;font-size:11px;letter-spacing:1.6px;font-weight:700;color:#657486">FOLLOW-THROUGH</p>`,
-    `<h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;color:#122233">You are invited to join ${esc(place)}</h1>`,
-    `<p style="margin:0 0 18px">Hello ${esc(input.name)},</p>`,
-    `<p style="margin:0 0 20px">${esc(place)} has invited you to join Follow-through as <strong>${esc(input.role)}</strong>.</p>`,
-    `<p style="margin:0 0 22px"><a href="${esc(input.link)}" style="display:inline-block;background:#122233;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 22px;border-radius:8px">Accept your invitation</a></p>`,
-    `<p style="margin:0 0 16px;color:#3c4b5c">You do not need to be signed in yet. When the page opens, sign in &mdash; or create an account &mdash; with <strong>${esc(input.to)}</strong>, then accept. The invitation expires in ${input.expiresInHours} hours and can be used once.</p>`,
-    `<p style="margin:0;font-size:12px;color:#657486">If you were not expecting this, you can ignore this message.</p>`,
-    `</div></body></html>`,
-  ].join("");
-
   try {
-    await transport.sendMail({
-      from: `"${config.fromName}" <${config.from}>`,
-      to: input.to,
-      subject,
-      text: body,
-      html,
-    });
+    await transport.sendMail({ from: `"${config.fromName}" <${config.from}>`, to, subject, text, html });
     return { sent: true };
   } catch (error) {
     const reason = String((error as Error).message ?? error).split("\n")[0];
@@ -117,4 +74,85 @@ export async function sendInvitationEmail(input: {
   } finally {
     transport.close();
   }
+}
+
+const shell = (body: string) =>
+  [
+    `<!doctype html><html><body style="margin:0;padding:24px;background:#f4f6f9;font-family:Arial,'Segoe UI',sans-serif;color:#172536">`,
+    `<div style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e1e7ed;border-radius:12px;padding:32px">`,
+    `<p style="margin:0 0 6px;font-size:11px;letter-spacing:1.6px;font-weight:700;color:#657486">FOLLOW-THROUGH</p>`,
+    body,
+    `</div></body></html>`,
+  ].join("");
+
+const button = (href: string, text: string) =>
+  `<p style="margin:0 0 22px"><a href="${esc(href)}" style="display:inline-block;background:#122233;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 22px;border-radius:8px">${esc(text)}</a></p>`;
+
+/**
+ * Sends an invitation. The recipient may have no account yet, so the message says plainly that the
+ * link lets them set a password (or use their existing one) before accepting.
+ */
+export async function sendInvitationEmail(input: {
+  to: string;
+  name: string;
+  business: string | null;
+  role: string;
+  link: string;
+  expiresInHours: number;
+}): Promise<MailResult> {
+  const place = input.business ?? "Follow-through";
+  const subject = `You are invited to join ${place}`;
+  const text = [
+    `Hello ${input.name},`,
+    "",
+    `${place} has invited you to join Follow-through as ${input.role}.`,
+    "",
+    "Open this link to accept:",
+    input.link,
+    "",
+    `If you are new, the page lets you choose a password for ${input.to}.`,
+    `If you already have an account for ${input.to}, enter your existing password instead.`,
+    `The invitation expires in ${input.expiresInHours} hours and can be used once.`,
+    "",
+    "If you were not expecting this, you can ignore this message.",
+  ].join("\n");
+  const html = shell(
+    [
+      `<h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;color:#122233">You are invited to join ${esc(place)}</h1>`,
+      `<p style="margin:0 0 18px">Hello ${esc(input.name)},</p>`,
+      `<p style="margin:0 0 20px">${esc(place)} has invited you to join Follow-through as <strong>${esc(input.role)}</strong>.</p>`,
+      button(input.link, "Accept your invitation"),
+      `<p style="margin:0 0 16px;color:#3c4b5c">When the page opens, choose a password for <strong>${esc(input.to)}</strong> &mdash; or enter your existing one &mdash; then accept. The invitation expires in ${input.expiresInHours} hours and can be used once.</p>`,
+      `<p style="margin:0;font-size:12px;color:#657486">If you were not expecting this, you can ignore this message.</p>`,
+    ].join(""),
+  );
+  return deliver(input.to, subject, text, html);
+}
+
+/**
+ * Sends a password-recovery link that we generated ourselves, so it travels over the configured
+ * SMTP provider instead of the platform mailer. The caller must keep its response generic.
+ */
+export async function sendRecoveryEmail(input: { to: string; link: string; expiresInHours: number }): Promise<MailResult> {
+  const subject = "Reset your Follow-through password";
+  const text = [
+    "Hello,",
+    "",
+    `We received a request to reset the password for ${input.to}.`,
+    "",
+    `Open this link to choose a new password. It expires in ${input.expiresInHours} hour and can be used once:`,
+    input.link,
+    "",
+    "If you did not request this, you can ignore this message. Your password is unchanged.",
+  ].join("\n");
+  const html = shell(
+    [
+      `<h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;color:#122233">Reset your password</h1>`,
+      `<p style="margin:0 0 18px">Hello,</p>`,
+      `<p style="margin:0 0 20px">We received a request to reset the password for <strong>${esc(input.to)}</strong>.</p>`,
+      button(input.link, "Choose a new password"),
+      `<p style="margin:0 0 16px;color:#3c4b5c">This link expires in ${input.expiresInHours} hour and can be used once. If you did not request it, you can ignore this message; your password is unchanged.</p>`,
+    ].join(""),
+  );
+  return deliver(input.to, subject, text, html);
 }

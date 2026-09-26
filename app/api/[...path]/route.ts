@@ -1,9 +1,9 @@
 import { NextRequest,NextResponse } from "next/server";
 import { z,ZodError } from "zod";
-import { timingSafeEqual } from "node:crypto";
+import { createHash,timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { account,authenticated,authClient,authThrottle,dbError,missingConfig,readEnv,requireTenant,rpc,setSessionCookies } from "@/lib/server";
-import { mailConfigured, sendInvitationEmail } from "@/lib/mail";
+import { mailConfigured, sendInvitationEmail, sendRecoveryEmail } from "@/lib/mail";
 import { AppError,checkOrigin,filterInput,validateCommand,toCsv } from "@/lib/domain";
 
 export const runtime="nodejs";
@@ -113,17 +113,28 @@ export async function POST(req:NextRequest,ctx:{params:Promise<{path:string[]}>}
    await setSessionCookies(data.session);return reply({ok:true});
   }
   if(path==="auth/signup"){
-   const values=credentials.extend({password:z.string().min(12).max(256)}).parse(input),db=authClient();
+   const values=credentials.extend({password:z.string().min(8).max(256)}).parse(input),db=authClient();
    await authThrottle(values.email);
    const {error}=await db.auth.signUp(values);
    if(error)throw new AppError(422,"Account registration could not be completed. Check your email or try signing in.");
    return reply({message:"If registration is available, check your email to confirm your account, then sign in and accept your invitation."});
   }
   if(path==="auth/forgot"){
-   const {email}=z.object({email:z.email()}).strict().parse(input),db=authClient();
+   const {email}=z.object({email:z.email()}).strict().parse(input);
    await authThrottle(email);
-   const {error}=await db.auth.resetPasswordForEmail(email,{redirectTo:new URL("/reset-password",process.env.APP_URL||req.url).href});
-   if(error)throw new AppError(503,"Password recovery is unavailable. Contact your business administrator.");
+   // Recovery travels over the configured SMTP provider (the same one invitations use), not the
+   // platform mailer, so delivery does not depend on Supabase's email settings. The response is
+   // identical whether or not the account exists, so it cannot be used to discover addresses.
+   const key=readEnv("SUPABASE_SERVICE_ROLE_KEY"),url=readEnv("NEXT_PUBLIC_SUPABASE_URL");
+   if(key&&url){
+    const admin=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
+    const {data}=await admin.auth.admin.generateLink({type:"recovery",email,options:{redirectTo:new URL("/reset-password",readEnv("APP_URL")??req.url).href}});
+    const hashed=data?.properties?.hashed_token;
+    if(hashed){
+     const link=new URL("/reset-password?token_hash="+encodeURIComponent(hashed),readEnv("APP_URL")??req.url).href;
+     await sendRecoveryEmail({to:email,link,expiresInHours:1});
+    }
+   }
    return reply({message:"If this account exists, a recovery email will be sent. Delivery depends on the configured email provider."});
   }
   if(path==="auth/confirm"){
@@ -131,6 +142,44 @@ export async function POST(req:NextRequest,ctx:{params:Promise<{path:string[]}>}
    const db=authClient(),{data,error}=await db.auth.verifyOtp({token_hash,type});
    if(error||!data.session)throw new AppError(422,"This link is invalid, expired, or already used.");
    await setSessionCookies(data.session);return reply({ok:true});
+  }
+  if(path==="auth/accept-invite"){
+   const {token,password}=z.object({token:z.string().regex(/^[a-f0-9-]{72}$/),password:z.string().min(8).max(256)}).strict().parse(input);
+   const key=readEnv("SUPABASE_SERVICE_ROLE_KEY"),url=readEnv("NEXT_PUBLIC_SUPABASE_URL"),publishable=readEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY");
+   if(!key||!url||!publishable)throw new AppError(503,"Invitations are not configured on this server.");
+   // The token was emailed to the invited address, so holding it proves control of that mailbox.
+   // A brand-new account is therefore created already confirmed, instead of depending on a platform
+   // confirmation email, while an existing account still has to supply its own password.
+   const admin=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
+   const hash=createHash("sha256").update(token,"utf8").digest("hex");
+   const {data:inv,error:lookup}=await admin.from("cb_invitations").select("email,used_at,revoked_at,expires_at").eq("token_hash",hash).maybeSingle();
+   if(lookup)throw new AppError(503,"The invitation could not be read. Please retry.");
+   if(!inv||inv.used_at||inv.revoked_at||new Date(String(inv.expires_at))<=new Date())throw new AppError(422,"This invitation is invalid, expired, or already used.");
+   await authThrottle(inv.email);
+   const db=authClient();
+   const signIn=async()=>(await db.auth.signInWithPassword({email:inv.email,password})).data.session;
+   let session=await signIn();
+   if(!session){
+    // An account may already exist for this address, for example left unconfirmed by an earlier
+    // sign-up. Holding the invitation token proves control of the mailbox, so an unconfirmed account
+    // may be confirmed here, but an existing account still has to supply its own password: the token
+    // must never be a way to take over an account someone already uses.
+    const listed=await admin.auth.admin.listUsers({page:1,perPage:200});
+    const existing=listed.data?.users.find(u=>u.email?.toLowerCase()===inv.email.toLowerCase());
+    if(existing&&!existing.email_confirmed_at)await admin.auth.admin.updateUserById(existing.id,{password,email_confirm:true});
+    session=await signIn();
+    if(!session){
+     if(existing)throw new AppError(422,"That address already has an account. Enter its existing password, or use \"Forgot your password?\".");
+     const created=await admin.auth.admin.createUser({email:inv.email,password,email_confirm:true});
+     if(created.error)throw new AppError(422,created.error.message);
+     session=await signIn();
+    }
+   }
+   if(!session)throw new AppError(503,"Account created, but sign-in failed. Please retry.");
+   await setSessionCookies(session);
+   const authed=createClient(url,publishable,{global:{headers:{Authorization:"Bearer "+session.access_token}},auth:{persistSession:false,autoRefreshToken:false}});
+   const result=await rpc(authed,"cb_command",{p_tenant:null,p_action:"invite.accept",p_data:{token}});
+   return reply({ok:true,tenant_id:result.tenant_id});
   }
   const {db}=await authenticated();
   if(path==="auth/logout"){
@@ -142,7 +191,7 @@ export async function POST(req:NextRequest,ctx:{params:Promise<{path:string[]}>}
   }
   if(path==="auth/password"){
    await account(db);
-   const {password}=z.object({password:z.string().min(12).max(256)}).strict().parse(input);
+   const {password}=z.object({password:z.string().min(8).max(256)}).strict().parse(input);
    const {error}=await db.auth.updateUser({password});
    if(error)throw new AppError(422,"Password update failed. Reopen your recovery link or sign in again.");
    await rpc(db,"cb_logout",{all_devices:true});
@@ -170,7 +219,7 @@ export async function POST(req:NextRequest,ctx:{params:Promise<{path:string[]}>}
    if(envelope.action==="invite.create"&&result&&typeof result.token==="string"){
     const invited=parsed as {email:string;name:string;role:string};
     const business=ac.memberships.find(m=>m.tenant_id===envelope.tenant)?.tenant_name??null;
-    const link=new URL("/invite?token="+encodeURIComponent(result.token),readEnv("APP_URL")??req.url).href;
+    const link=new URL("/invite?token="+encodeURIComponent(result.token)+"&email="+encodeURIComponent(invited.email),readEnv("APP_URL")??req.url).href;
     const mail=await sendInvitationEmail({to:invited.email,name:invited.name,business,role:invited.role,link,expiresInHours:48});
     return reply(mail.sent
       ?{...result,delivery:"email",delivered_to:invited.email}
