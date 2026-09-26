@@ -17,4 +17,5 @@ Checked diff and secret boundaries -> git diff --check; git check-ignore .env.lo
 Configured local APP_URL and generated CRON_SECRET without printing values -> npm run check:ready -> BLOCKED: missing server configuration: SUPABASE_SERVICE_ROLE_KEY.
 Attempted optional retirement of legacy SQL entry point -> approved-command review -> rejected because AGENTS prohibits changing pre-existing files; no retry/workaround; originals retained and migration path documented.
 Re-verified SMTP after the send-token/sender change -> npm run smtp:check with vercel-env.txt values overriding .env.local -> host smtp.zeptomail.com:587, from "Support -IDash <mail@moneyoptions.in>", connection + STARTTLS + authentication : OK. .env.local still fails 535 (stale, old credential/sender).
+Synced .env.local SMTP keys from vercel-env.txt (password, sender; host/port/user/name confirmed) -> npm run smtp:check -> connection + STARTTLS + authentication : OK from .env.local alone; CRLF/encoding preserved, daily/monthly limits untouched.
 

@@ -361,8 +361,9 @@ the local values with the handoff ones:
   Credentials are valid. Re-run with --send to deliver one test message.
 
 So the new credential authenticates; the Addendum 3 credit exhaustion no longer blocks SMTP
-authentication. `.env.local` still carries the previous credential and sender and fails with
-535 Authentication Failed until it is synced.
+authentication. `.env.local` was then synced to the same credential and sender (the previous local
+values failed with 535 Authentication Failed), and `npm run smtp:check` against `.env.local` alone
+printed `connection + STARTTLS + authentication : OK`.
 
 Neither `.env.local` nor `vercel-env.txt` is tracked (both gitignored): the credential must never
 be committed. The application reads mail configuration at runtime, so the new values have to be
