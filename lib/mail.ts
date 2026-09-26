@@ -72,20 +72,35 @@ export async function sendInvitationEmail(input: {
     socketTimeout: 20000,
   });
 
-  const where = input.business ? `${input.business} on Follow-through` : "Follow-through";
-  const subject = `You have been invited to ${input.business ?? "Follow-through"}`;
+  const place = input.business ?? "Follow-through";
+  const subject = `You are invited to join ${place}`;
   const body = [
     `Hello ${input.name},`,
     "",
-    `You have been invited to join ${where} with the role: ${input.role}.`,
+    `${place} has invited you to join Follow-through as ${input.role}.`,
     "",
-    `Open this link to accept, within ${input.expiresInHours} hours:`,
+    "Open this link to accept:",
     input.link,
     "",
-    `Sign in with ${input.to} first, then open the link. The invitation works once.`,
+    `You do not need to be signed in yet. If you already have an account for ${input.to}, sign in when the page asks.`,
+    `If you do not, the link lets you create one with ${input.to}. Then accept the invitation.`,
+    `It expires in ${input.expiresInHours} hours and can be used once.`,
     "",
     "If you were not expecting this, you can ignore this message.",
   ].join("\n");
+  const esc = (value: string) => value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+  const html = [
+    `<!doctype html><html><body style="margin:0;padding:24px;background:#f4f6f9;font-family:Arial,'Segoe UI',sans-serif;color:#172536">`,
+    `<div style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e1e7ed;border-radius:12px;padding:32px">`,
+    `<p style="margin:0 0 6px;font-size:11px;letter-spacing:1.6px;font-weight:700;color:#657486">FOLLOW-THROUGH</p>`,
+    `<h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;color:#122233">You are invited to join ${esc(place)}</h1>`,
+    `<p style="margin:0 0 18px">Hello ${esc(input.name)},</p>`,
+    `<p style="margin:0 0 20px">${esc(place)} has invited you to join Follow-through as <strong>${esc(input.role)}</strong>.</p>`,
+    `<p style="margin:0 0 22px"><a href="${esc(input.link)}" style="display:inline-block;background:#122233;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 22px;border-radius:8px">Accept your invitation</a></p>`,
+    `<p style="margin:0 0 16px;color:#3c4b5c">You do not need to be signed in yet. When the page opens, sign in &mdash; or create an account &mdash; with <strong>${esc(input.to)}</strong>, then accept. The invitation expires in ${input.expiresInHours} hours and can be used once.</p>`,
+    `<p style="margin:0;font-size:12px;color:#657486">If you were not expecting this, you can ignore this message.</p>`,
+    `</div></body></html>`,
+  ].join("");
 
   try {
     await transport.sendMail({
@@ -93,6 +108,7 @@ export async function sendInvitationEmail(input: {
       to: input.to,
       subject,
       text: body,
+      html,
     });
     return { sent: true };
   } catch (error) {

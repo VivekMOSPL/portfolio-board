@@ -112,7 +112,11 @@ assert.ok(raw.includes("no-reply@example.test"), "message must carry the configu
 assert.ok(decoded.includes(link), "the decoded message must contain the invitation link intact");
 assert.ok(decoded.includes("IDash"), "the decoded message must name the business");
 assert.ok(decoded.includes("48 hours"), "the decoded message must state the expiry");
-console.log("  decoded message verified: recipient, sender, intact invitation link, business and expiry");
+assert.ok(/Content-Type:\s*text\/plain/i.test(raw), "a plain-text part must be present");
+assert.ok(/Content-Type:\s*text\/html/i.test(raw), "an HTML part must be present");
+assert.ok(decoded.includes("Accept your invitation"), "the message must carry a clear call to action");
+assert.ok(decoded.toLowerCase().includes("create an account") || decoded.toLowerCase().includes("create one"), "the message must explain how a new invitee gets an account");
+console.log("  decoded message verified: recipient, sender, intact link, business, expiry, text + HTML parts, CTA and account guidance");
 
 console.log("=== path 2: provider unreachable ===");
 process.env.SMTP_HOST = "127.0.0.1";

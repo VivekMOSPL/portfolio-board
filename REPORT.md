@@ -425,3 +425,24 @@ Evidence:
     sign-in link"; forged-origin POST 403; unauthenticated data 401; unknown page 404; browser errors 0
 
 The accept step still needs an account for the invited address, as in Addendum 5.
+
+
+---
+
+# Addendum 7 — 2026-09-26: the invitation email explains itself
+
+The first invitation read "Sign in with <address> first, then open the link", which told a recipient
+who has no account nothing about how to get one. lib/mail.ts now sends a clearer message plus an
+HTML alternative with a button:
+  - names who invited them and in what role;
+  - says they do not need to be signed in yet, and that the link lets them create an account with
+    the invited address;
+  - one clear "Accept your invitation" button (HTML) and the raw link (text);
+  - keeps the 48-hour, single-use wording.
+The plain-text part remains authoritative for clients that do not render HTML.
+
+Evidence:
+  npm run mail:verify -> recipient, sender, intact link, business, expiry, text + HTML parts, CTA
+    and account guidance all verified; failure and unconfigured paths unchanged
+  npm run lint; npm run typecheck; npm run build -> clean
+  npm test -> tests 33; pass 33; fail 0
