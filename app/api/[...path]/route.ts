@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import { account,authenticated,authClient,authThrottle,dbError,missingConfig,readEnv,requireTenant,rpc,setSessionCookies } from "@/lib/server";
 import { mailConfigured, sendInvitationEmail, sendRecoveryEmail } from "@/lib/mail";
 import { AppError,checkOrigin,filterInput,validateCommand,toCsv } from "@/lib/domain";
+import { bearerKey,hashIntegrationKey,issueIntegrationKey } from "@/lib/integration";
 
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
@@ -25,6 +26,22 @@ function failure(err:unknown) {
  return reply({error:"The request could not be completed. Please retry."},500);
 }
 const credentials=z.object({email:z.email(),password:z.string().min(1).max(256)}).strict();
+// Machine authentication for IDash-App. The tenant is derived solely from the credential; the caller
+// never supplies it. Returns a service client and the resolved tenant, or throws 401/429.
+async function integrationAuth(req:NextRequest,endpoint:string) {
+ const supplied=bearerKey(req.headers.get("authorization"));
+ const key=readEnv("SUPABASE_SERVICE_ROLE_KEY"),url=readEnv("NEXT_PUBLIC_SUPABASE_URL");
+ if(!key||!url)throw new AppError(503,"Integrations are not configured on this server.");
+ if(!supplied)throw new AppError(401,"Unauthorized");
+ const service=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
+ const hash=hashIntegrationKey(supplied);
+ const auth=await rpc(service,"cb_integration_authenticate",{p_key_hash:hash});
+ if(!auth){await rpc(service,"cb_integration_log",{p_tenant:null,p_credential:null,p_endpoint:endpoint,p_outcome:"invalid"});throw new AppError(401,"Unauthorized");}
+ if(auth.error){await rpc(service,"cb_integration_log",{p_tenant:auth.tenant_id??null,p_credential:auth.credential_id??null,p_endpoint:endpoint,p_outcome:"revoked"});throw new AppError(401,"Unauthorized");}
+ const allowed=await rpc(service,"cb_integration_attempt",{p_key:hash,p_limit:600,p_window_seconds:60});
+ if(!allowed){await rpc(service,"cb_integration_log",{p_tenant:auth.tenant_id,p_credential:auth.credential_id,p_endpoint:endpoint,p_outcome:"rate_limited"});throw new AppError(429,"Too many requests");}
+ return {service,auth};
+}
 export async function GET(req:NextRequest,ctx:{params:Promise<{path:string[]}>}) {
  try {
   const path=(await ctx.params).path.join("/");
@@ -32,6 +49,8 @@ export async function GET(req:NextRequest,ctx:{params:Promise<{path:string[]}>})
   const {db,user}=await authenticated();
   const ac=await account(db);
     if(path==="session")return reply({...ac,email:user.email,mail_configured:mailConfigured()});
+  // The tenant comes from the caller's own membership in the database; any tenant parameter is ignored.
+  if(path==="integration-links")return reply(await rpc(db,"cb_client_link_queue"));
   const resource=req.nextUrl.searchParams.get("resource")??"followups";
   const tenant=req.nextUrl.searchParams.get("tenant")??"";
   const page=z.coerce.number().int().min(1).max(100000).parse(req.nextUrl.searchParams.get("page")??1);
@@ -101,6 +120,26 @@ export async function POST(req:NextRequest,ctx:{params:Promise<{path:string[]}>}
    if(!key||!url)throw new AppError(503,"Background jobs are not configured");
    const db=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
    return reply({created:await rpc(db,"cb_reminders")});
+  }
+  // Machine channel for IDash-App. Authenticated by a per-business integration key (never CRON_SECRET),
+  // tenant derived solely from the credential, rate-limited and audited. It cannot issue or rotate keys.
+  if(path==="integrations/idash/ping"){
+   const {service,auth}=await integrationAuth(req,"integrations/idash/ping");
+   await rpc(service,"cb_integration_log",{p_tenant:auth.tenant_id,p_credential:auth.credential_id,p_endpoint:"integrations/idash/ping",p_outcome:"ok"});
+   return reply({ok:true,tenant_id:auth.tenant_id,server_time:new Date().toISOString()});
+  }
+  // Client identity push. Records links for staff review; nothing is merged automatically. Idempotent
+  // by idempotency_key: a replay returns the first response, a different body under the same key is 409.
+  if(path==="integrations/idash/clients"){
+   const {service,auth}=await integrationAuth(req,"integrations/idash/clients");
+   const input=await body(req);
+   const parsed=z.object({idempotency_key:z.string().min(8).max(120),clients:z.array(z.object({external_client_id:z.string().min(1).max(120),display_name:z.string().min(1).max(160),email:z.email().optional(),phone:z.string().min(6).max(20).optional(),pan_hash:z.string().regex(/^[a-f0-9]{64}$/).optional()}).strict()).min(1).max(200)}).strict().parse(input);
+   const requestHash=createHash("sha256").update(JSON.stringify(parsed.clients),"utf8").digest("hex");
+   const result=await rpc(service,"cb_client_push_idempotent",{p_tenant:auth.tenant_id,p_key:parsed.idempotency_key,p_endpoint:"integrations/idash/clients",p_hash:requestHash,p_clients:parsed.clients});
+   if(result.status==="conflict")throw new AppError(409,"This idempotency key was used with a different request");
+   if(result.status==="in_progress")throw new AppError(409,"A request with this idempotency key is already being processed");
+   await rpc(service,"cb_integration_log",{p_tenant:auth.tenant_id,p_credential:auth.credential_id,p_endpoint:"integrations/idash/clients",p_outcome:"ok"});
+   return reply(result.response);
   }
   checkOrigin(req.headers.get("origin"),process.env.APP_URL||req.url);
   const input=await body(req);
@@ -204,6 +243,31 @@ export async function POST(req:NextRequest,ctx:{params:Promise<{path:string[]}>}
    if(requireTenant(await account(db),tenant).role!=="admin")throw new AppError(403,"Administrator required");
    const {workbookRows}=await import("@/lib/workbooks");
    return reply({rows:await workbookRows(Buffer.from(content,"base64"))});
+  }
+  // Issuance and rotation are session-authenticated and administrator-only. The plaintext key is
+  // returned exactly once; the database stores only its hash. A machine caller cannot reach these.
+  if(path==="integrations/credentials/issue"){
+   const {tenant,label}=z.object({tenant:uuid,label:z.string().min(2).max(80)}).strict().parse(input);
+   if(requireTenant(await account(db),tenant).role!=="admin")throw new AppError(403,"Administrator required");
+   const secret=issueIntegrationKey();
+   const result=await rpc(db,"cb_integration_credential_issue",{p_tenant:tenant,p_label:label,p_key_hash:hashIntegrationKey(secret),p_key_prefix:secret.slice(0,8)});
+   return reply({credential_id:result.credential_id,key:secret,shown_once:true});
+  }
+  if(path==="integrations/credentials/rotate"){
+   const {credential}=z.object({credential:uuid}).strict().parse(input);
+   const secret=issueIntegrationKey();
+   const result=await rpc(db,"cb_integration_credential_rotate",{p_credential:credential,p_key_hash:hashIntegrationKey(secret),p_key_prefix:secret.slice(0,8)});
+   return reply({credential_id:result.credential_id,key:secret,shown_once:true});
+  }
+  // Staff confirm a client link. Administrator or manager only; the database enforces the role.
+  if(path==="integration-links/confirm"){
+   const {link,client}=z.object({link:uuid,client:uuid}).strict().parse(input);
+   return reply(await rpc(db,"cb_client_link_confirm",{p_link:link,p_client:client}));
+  }
+  // Deletes the sensitive intake record for a link. Administrator or manager of the owning tenant only.
+  if(path==="integration-links/forget"){
+   const {link}=z.object({link:uuid}).strict().parse(input);
+   return reply(await rpc(db,"cb_client_intake_forget",{p_link:link}));
   }
   if(path==="command"){
    const envelope=z.object({tenant:z.union([uuid,z.null()]),action:z.string().max(60),data:z.unknown()}).strict().parse(input);

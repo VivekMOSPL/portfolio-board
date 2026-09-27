@@ -446,3 +446,45 @@ Evidence:
     and account guidance all verified; failure and unconfigured paths unchanged
   npm run lint; npm run typecheck; npm run build -> clean
   npm test -> tests 33; pass 33; fail 0
+
+
+---
+
+# Addendum 8 — 2026-09-27: client identity push slice fixed and verified
+
+Slice 1.2 (client identity push for IDash-App) was failing one assertion: a stale `reserved`
+idempotency record with a different request hash returned `conflict` instead of `in_progress`.
+
+Root cause: `cb_client_push_idempotent` checked `request_hash` mismatch before checking whether the
+existing record was still `reserved` (in flight). A second caller arriving while the first was
+still running — even with a different body — was told the key was in conflict, instead of being
+told the first request was still in progress.
+
+Fix in `supabase/migrations/202609270008_client_links.sql`: the `done` branch is now checked first
+(replay on hash match; conflict on hash mismatch), and only if the existing record is `reserved`
+does the function return `in_progress` (within 5 min) or take over a stale reservation. This makes
+two racing requests with the same key and body serialise correctly: one applies, the other replays.
+
+`apply-all.sql` was regenerated via `npm run db:bundle` to match all eight migration files; its
+migration-8 checksum is now `43fe4ce57eb073c8` (was stale at `67aae7ccc9db0a62`).
+
+Evidence:
+  npm test -> tests 36, pass 36, fail 0, duration_ms 18680.1084
+    (incl. "client identity push: review only, idempotent, tenant-scoped, confirm links")
+  npm run typecheck -> no output, no errors
+  npm run lint -> no findings
+  npm run db:bundle -> bundled 8 migrations; migration 8 checksum 43fe4ce57eb073c8
+
+Claims ledger:
+  - Client identity push slice (Slice 1.2): full test suite green, including idempotency,
+    tenant-scoping (queue derives tenant from caller's membership, never a parameter),
+    PAN hash rejection of non-hex input, PAN hash cleared on link confirmation,
+    and intake record forgettable only by admin/manager. Proven by tests/database.test.mjs
+    lines 261-348.
+  - apply-all.sql: regenerated and in lockstep with the migration files. UNVERIFIED against
+    the hosted database (no SUPABASE_SERVICE_ROLE_KEY available).
+
+What I would tell the next person:
+  The `apply-all.sql` drift was caused by editing the migration file without regenerating the
+  bundle. The `db:bundle` script prints per-file checksums; a mismatch between the bundle's
+  header and the migrations directory is an immediate signal that it is out of date.

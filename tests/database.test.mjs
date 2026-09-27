@@ -209,5 +209,142 @@ test("real PostgreSQL schema, RLS, transactions and workflows", async (t) => {
   await as("platform");
   assert.equal((await db.query("select cb_access_valid() ok")).rows[0].ok,true);
  });
+ await t.test("integration credential: admin-only issue, hash-only storage, rotate, rate limit, isolation",async()=>{
+  const { createHash, randomBytes } = await import("node:crypto");
+  const hash=(k)=>createHash("sha256").update(k,"utf8").digest("hex");
+  const keyA=randomBytes(32).toString("base64url"), keyB=randomBytes(32).toString("base64url"), keyD=randomBytes(32).toString("base64url");
+  // Self-contained: two fresh tenants so earlier subtests cannot affect this one.
+  await as("platform");
+  const c=await command(null,"tenant.create",{name:"Gamma Advisors"});
+  const d=await command(null,"tenant.create",{name:"Delta Advisors"});
+  await db.exec("reset role");
+  const adminC=randomUUID(), rmC=randomUUID(), adminD=randomUUID();
+  await db.query("insert into auth.users values($1,$2),($3,$4),($5,$6)",[adminC,"adminC@example.test",rmC,"rmC@example.test",adminD,"adminD@example.test"]);
+  await db.query("insert into cb_members(tenant_id,user_id,name,email,role) values($1,$2,$3,$4,'admin'),($1,$5,$6,$7,'rm'),($8,$9,$10,$11,'admin')",[c.id,adminC,"Admin C","adminC@example.test",rmC,"RM C","rmC@example.test",d.id,adminD,"Admin D","adminD@example.test"]);
+  users.adminC=adminC;users.rmC=rmC;users.adminD=adminD;
+  await as("adminC");
+  await assert.rejects(db.query("select key_hash from cb_integration_credentials"),/permission denied/);
+  const issued=(await db.query("select cb_integration_credential_issue($1,$2,$3,$4) r",[c.id,"IDash App",hash(keyA),keyA.slice(0,8)])).rows[0].r;
+  assert.ok(issued.credential_id);
+  await db.exec("reset role");
+  const stored=(await db.query("select * from cb_integration_credentials where id=$1",[issued.credential_id])).rows[0];
+  assert.equal(stored.key_hash,hash(keyA));assert.ok(!JSON.stringify(stored).includes(keyA));assert.equal(stored.status,"active");assert.equal(stored.tenant_id,c.id);
+  await as("rmC");
+  await assert.rejects(db.query("select cb_integration_credential_issue($1,$2,$3,$4)",[c.id,"Nope",hash(randomBytes(32).toString("base64url")),"abcdefgh"]),/Administrator required/);
+  await as("adminD");
+  await assert.rejects(db.query("select cb_integration_credential_issue($1,$2,$3,$4)",[c.id,"Nope",hash(randomBytes(32).toString("base64url")),"abcdefgh"]),/Administrator required/);
+  await as("adminC");
+  await assert.rejects(db.query("select cb_integration_authenticate($1)",[hash(keyA)]),/permission denied/);
+  await db.exec("reset role; set role service_role");
+  const okAuth=(await db.query("select cb_integration_authenticate($1) r",[hash(keyA)])).rows[0].r;
+  assert.equal(okAuth.tenant_id,c.id);assert.equal(okAuth.credential_id,issued.credential_id);
+  assert.equal((await db.query("select cb_integration_authenticate($1) r",[hash(randomBytes(32).toString("base64url"))])).rows[0].r,null);
+  const rlKey=hash(randomBytes(32).toString("base64url"));
+  for(let i=0;i<3;i++)assert.equal((await db.query("select cb_integration_attempt($1,3,60) ok",[rlKey])).rows[0].ok,true);
+  assert.equal((await db.query("select cb_integration_attempt($1,3,60) ok",[rlKey])).rows[0].ok,false);
+  await db.query("select cb_integration_log($1,$2,$3,$4)",[c.id,issued.credential_id,"integrations/idash/ping","ok"]);
+  await db.exec("reset role");
+  assert.equal(await count("cb_integration_audit"),1);
+  await assert.rejects(db.query("update cb_integration_audit set outcome='invalid'"),/History is immutable/);
+  await as("adminC");
+  const rotated=(await db.query("select cb_integration_credential_rotate($1,$2,$3) r",[issued.credential_id,hash(keyB),keyB.slice(0,8)])).rows[0].r;
+  assert.ok(rotated.credential_id);assert.notEqual(rotated.credential_id,issued.credential_id);
+  await db.exec("reset role; set role service_role");
+  assert.equal((await db.query("select cb_integration_authenticate($1) r",[hash(keyA)])).rows[0].r.error,"revoked");
+  assert.equal((await db.query("select cb_integration_authenticate($1) r",[hash(keyB)])).rows[0].r.tenant_id,c.id);
+  await as("adminD");
+  await db.query("select cb_integration_credential_issue($1,$2,$3,$4)",[d.id,"IDash App",hash(keyD),keyD.slice(0,8)]);
+  await db.exec("reset role; set role service_role");
+  const authD=(await db.query("select cb_integration_authenticate($1) r",[hash(keyD)])).rows[0].r;
+  assert.equal(authD.tenant_id,d.id);assert.notEqual(authD.tenant_id,c.id);
+ });
+ await t.test("client identity push: review only, idempotent, tenant-scoped, confirm links",async()=>{
+  await as("platform");
+  const e=await command(null,"tenant.create",{name:"Epsilon Advisors"});
+  await db.exec("reset role");
+  const adminE=randomUUID(), mgrE=randomUUID(), rmE=randomUUID();
+  await db.query("insert into auth.users values($1,$2),($3,$4),($5,$6)",[adminE,"adminE@example.test",mgrE,"mgrE@example.test",rmE,"rmE@example.test"]);
+  await db.query("insert into cb_members(tenant_id,user_id,name,email,role) values($1,$2,$3,$4,'admin'),($1,$5,$6,$7,'manager'),($1,$8,$9,$10,'rm')",[e.id,adminE,"Admin E","adminE@example.test",mgrE,"Mgr E","mgrE@example.test",rmE,"RM E","rmE@example.test"]);
+  users.adminE=adminE;users.mgrE=mgrE;users.rmE=rmE;
+  await as("adminE");
+  const cl1=await command(e.id,"client.create",{code:"E1",name:"Existing One",email:"one@example.test",owner_id:rmE});
+  await command(e.id,"client.create",{code:"E2",name:"Existing Two",phone:"+919812345678",owner_id:rmE});
+  const { createHash } = await import("node:crypto");
+  const h=(s)=>createHash("sha256").update(s,"utf8").digest("hex");
+  const batch=JSON.stringify([
+    {external_client_id:"IDASH-1",display_name:"One",email:"one@example.test",pan_hash:"c".repeat(64)},
+    {external_client_id:"IDASH-2",display_name:"Two",phone:"+919812345678"},
+    {external_client_id:"IDASH-3",display_name:"Unknown",email:"nobody@example.test"}
+  ]);
+  const pushIdem=(key,body)=>db.query("select cb_client_push_idempotent($1,$2,$3,$4,$5) r",[e.id,key,"integrations/idash/clients",h(body),body]);
+  // one email match, one phone match, one with no match; nothing is auto-merged
+  await db.exec("reset role; set role service_role");
+  const first=(await pushIdem("key-push-0001",batch)).rows[0].r;
+  assert.equal(first.status,"applied");
+  const by=Object.fromEntries(first.response.results.map(r=>[r.external_client_id,r]));
+  assert.equal(by["IDASH-1"].action,"pending_review");assert.equal(by["IDASH-1"].candidates,1);
+  assert.equal(by["IDASH-2"].action,"pending_review");assert.equal(by["IDASH-2"].candidates,1);
+  assert.equal(by["IDASH-3"].action,"unmatched");assert.equal(by["IDASH-3"].candidates,0);
+  await db.exec("reset role");
+  assert.equal((await db.query("select count(*) n from cb_client_links where tenant_id=$1 and status='linked'",[e.id])).rows[0].n,0);
+  assert.equal((await db.query("select count(*) n from cb_client_links where tenant_id=$1",[e.id])).rows[0].n,3);
+  assert.equal((await db.query("select client_id from cb_client_links where tenant_id=$1 and external_client_id='IDASH-3'",[e.id])).rows[0].client_id,null);
+  // a replay with the same key and body returns the first response and writes nothing
+  await db.exec("set role service_role");
+  const replay=(await pushIdem("key-push-0001",batch)).rows[0].r;
+  assert.equal(replay.status,"replay");assert.deepEqual(replay.response,first.response);
+  await db.exec("reset role");
+  assert.equal((await db.query("select count(*) n from cb_client_links where tenant_id=$1",[e.id])).rows[0].n,3);
+  // the same key with a different body is a conflict and writes nothing
+  await db.exec("set role service_role");
+  assert.equal((await pushIdem("key-push-0001",JSON.stringify([{external_client_id:"IDASH-9",display_name:"Other"}]))).rows[0].r.status,"conflict");
+  await db.exec("reset role");
+  assert.equal((await db.query("select count(*) n from cb_client_links where tenant_id=$1",[e.id])).rows[0].n,3);
+  // a request already holding the reservation blocks a second write and reports in_progress
+  await db.query("insert into cb_integration_requests(tenant_id,idempotency_key,endpoint,request_hash,status) values($1,'key-push-0002','integrations/idash/clients',$2,'reserved')",[e.id,"d".repeat(64)]);
+  await db.exec("set role service_role");
+  assert.equal((await pushIdem("key-push-0002",JSON.stringify([{external_client_id:"IDASH-4",display_name:"Four"}]))).rows[0].r.status,"in_progress");
+  await db.exec("reset role");
+  assert.equal((await db.query("select count(*) n from cb_client_links where tenant_id=$1",[e.id])).rows[0].n,3);
+  // a stale reservation can be taken over so a crashed request cannot block the key forever
+  await db.query("update cb_integration_requests set created_at=now()-interval '6 minutes' where tenant_id=$1 and idempotency_key='key-push-0002'",[e.id]);
+  await db.exec("set role service_role");
+  assert.equal((await pushIdem("key-push-0002",JSON.stringify([{external_client_id:"IDASH-4",display_name:"Four"}]))).rows[0].r.status,"applied");
+  await db.exec("reset role");
+  assert.equal((await db.query("select count(*) n from cb_client_links where tenant_id=$1",[e.id])).rows[0].n,4);
+  // two racing requests with the same key and body: exactly one applies
+  await db.exec("set role service_role");
+  const race=await Promise.all([pushIdem("key-push-0003",JSON.stringify([{external_client_id:"IDASH-5",display_name:"Five"}])),pushIdem("key-push-0003",JSON.stringify([{external_client_id:"IDASH-5",display_name:"Five"}]))]);
+  assert.deepEqual(race.map(r=>r.rows[0].r.status).sort(),["applied","replay"]);
+  await db.exec("reset role");
+  assert.equal((await db.query("select count(*) n from cb_client_links where tenant_id=$1 and external_client_id='IDASH-5'",[e.id])).rows[0].n,1);
+  // queue: tenant from the caller's membership only, never a parameter; no pan_hash; others see nothing
+  await as("rmE");
+  assert.equal((await db.query("select jsonb_array_length(cb_client_link_queue()) n")).rows[0].n,0);
+  await as("adminD");
+  assert.equal((await db.query("select jsonb_array_length(cb_client_link_queue()) n")).rows[0].n,0);
+  await as("mgrE");
+  const queue=(await db.query("select cb_client_link_queue() q")).rows[0].q;
+  assert.ok(queue.length>=4);
+  assert.ok(queue.every(row=>row.tenant_id===e.id));
+  assert.ok(!JSON.stringify(queue).includes("pan_hash"));
+  await db.exec("reset role");
+  const link1=(await db.query("select id from cb_client_links where tenant_id=$1 and external_client_id='IDASH-1'",[e.id])).rows[0].id;
+  await as("mgrE");
+  await db.query("select cb_client_link_confirm($1,$2)",[link1,cl1.id]);
+  await db.exec("reset role");
+  const linked=(await db.query("select status,client_id,reviewed_by from cb_client_links where id=$1",[link1])).rows[0];
+  assert.equal(linked.status,"linked");assert.equal(linked.client_id,cl1.id);assert.equal(linked.reviewed_by,mgrE);
+  // the PAN hash is cleared on confirmation, and the intake record can be deleted on request
+  assert.equal((await db.query("select pan_hash from cb_client_intake where tenant_id=$1 and external_client_id='IDASH-1'",[e.id])).rows[0].pan_hash,null);
+  await as("mgrE");
+  await db.query("select cb_client_intake_forget($1)",[link1]);
+  await db.exec("reset role");
+  assert.equal((await db.query("select count(*) n from cb_client_intake where tenant_id=$1 and external_client_id='IDASH-1'",[e.id])).rows[0].n,0);
+  // an RM can neither confirm a link nor delete an intake record
+  await as("rmE");
+  await assert.rejects(db.query("select cb_client_link_confirm($1,$2)",[link1,cl1.id]),/Permission required/);
+  await assert.rejects(db.query("select cb_client_intake_forget($1)",[link1]),/Permission required/);
+ });
  await db.close();
 });

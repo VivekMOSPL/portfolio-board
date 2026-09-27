@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --import tsx --test tests/database.test.mjs tests/domain.test.ts tests/workbooks.test.ts",
+    "test": "node --import tsx --test tests/database.test.mjs tests/domain.test.ts tests/integration.test.ts tests/workbooks.test.ts",
     "typecheck": "tsc --noEmit",
     "test:browser": "node scripts/browser-smoke.mjs",
     "check:ready": "node --env-file=.env.local scripts/check-ready.mjs",

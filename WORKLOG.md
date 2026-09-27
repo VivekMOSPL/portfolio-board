@@ -11,7 +11,11 @@ Added server validation -> node --import tsx --test tests/domain.test.ts -> test
 Extended session and workflow coverage -> npm test -> tests 33; pass 33; fail 0; duration_ms 5428.3866 on final run.
 Verified final source -> npm run lint; npm run build -> no lint findings; Compiled successfully in 4.1s; Finished TypeScript in 8.4s; routes /, /_not-found, /[section], /api/[...path].
 Verified final browser/public HTTP behavior -> npm run test:browser -> desktop/tablet/mobile HTTP 200, labelled controls visible, no horizontal overflow; forged-origin POST 403; unauthenticated data 401; unknown page 404; browser errors 0; security header assertions passed.
-Verified workbook handling -> node --import tsx --test tests/workbooks.test.ts -> tests 3; pass 3; fail 0, also included in final 33-test suite.
+Verified final workbook handling -> node --import tsx --test tests/workbooks.test.ts -> tests 3; pass 3; fail 0, also included in final 33-test suite.
+Fixed cb_client_push_idempotent check order: status='done' (replay/conflict) is tested before the 'reserved' in-flight branch, so a stale reservation with a different hash returns 'in_progress' instead of 'conflict' (tests/database.test.mjs:306).
+Regenerated supabase/apply-all.sql from migrations -> npm run db:bundle -> bundled 8 migrations, migration 8 checksum now 43fe4ce57eb073c8 (was 67aae7ccc9db0a62).
+Re-verified full suite after fix -> npm test -> tests 36, pass 36, fail 0, duration_ms 18680.1084.
+Re-verified static analysis -> npm run typecheck -> no output, no errors; npm run lint -> no findings.
 Checked dependencies -> npm audit --omit=dev -> found 0 vulnerabilities after patched compatible UUID override.
 Checked diff and secret boundaries -> git diff --check; git check-ignore .env.local; node --env-file=.env.local scripts/check-browser-secrets.mjs -> no diff errors (LF/CRLF notices only); .env.local; PASS configured server secret values absent from .next/static, checked 1 configured secret.
 Configured local APP_URL and generated CRON_SECRET without printing values -> npm run check:ready -> BLOCKED: missing server configuration: SUPABASE_SERVICE_ROLE_KEY.
