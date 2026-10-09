@@ -104,6 +104,9 @@ try {
   process.exit(1);
 }
 
+// Declared at module scope: assigned while inspecting the schema, read by the migration loop below.
+let ledgerExists = false;
+
 try {
   const info = await client.query(
     "select current_database() as db, current_user as usr, current_setting('server_version') as ver",
@@ -123,6 +126,7 @@ try {
     .then((r) => r.rows[0].t)
     .catch(() => null);
   console.log(`tracking table               : ${already ?? "will be created"}`);
+  ledgerExists = already !== null && already !== undefined;
   console.log("");
 } catch (error) {
   console.error(`BLOCKED: connected but could not read the schema — ${error.message}`);
@@ -146,7 +150,9 @@ try {
 
   for (const migration of migrations) {
     let recorded = null;
-    if (!DRY_RUN) {
+    // Read the ledger in both modes. A dry run that cannot see what is already applied is
+    // useless: it would list every migration as pending and hide the real remaining work.
+    if (ledgerExists) {
       const existing = await client.query(
         "select checksum from cb_schema_migrations where version = $1",
         [migration.file],
@@ -192,7 +198,10 @@ try {
       throw error;
     }
   }
-} catch {
+} catch (error) {
+  console.error(`FAILED: ${error.message}`);
+  if (error.detail) console.error(`  detail: ${error.detail}`);
+  if (error.hint) console.error(`  hint: ${error.hint}`);
   await client.end();
   process.exit(1);
 }
