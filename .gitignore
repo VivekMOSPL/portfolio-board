@@ -50,3 +50,6 @@ backups/
 
 # Deployment variable handoff - never publish
 vercel-env.txt
+
+# Local offline sign-in credentials - never publish
+.local-auth.txt

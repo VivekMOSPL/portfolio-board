@@ -1,4 +1,4 @@
-﻿// Creates and seeds the MySQL provider database, then runs the isolation assertions.
+// Creates and seeds the MySQL provider database, then runs the isolation assertions.
 //
 //   npm run db:mysql:setup     create the database, apply 001-003, grant the application user
 //   npm run db:mysql:checks    run the 25 isolation assertions in 004
@@ -20,7 +20,7 @@ import mysql from "mysql2/promise";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const mysqlDir = path.join(here, "..", "mysql");
 
-const SETUP_FILES = ["001_schema.sql", "002_authorization.sql", "003_seed.sql", "005_app_functions.sql"];
+const SETUP_FILES = ["001_schema.sql", "002_authorization.sql", "003_seed.sql", "005_app_functions.sql", "006_local_auth.sql", "007_read_page.sql"];
 const CHECK_FILE = "004_isolation_checks.sql";
 
 const MODE = process.argv.includes("--checks") ? "checks" : "setup";

@@ -1,4 +1,5 @@
 import mysql from "mysql2/promise";
+import { AppError } from "../domain";
 import { activeProvider, setting } from "./config";
 
 /**
@@ -64,7 +65,9 @@ async function parameterNames(fn: string): Promise<string[]> {
   // rather than depending on the server's casing.
   const names = rows.map((r) => String((r as Record<string, unknown>).PARAMETER_NAME ?? (r as Record<string, unknown>).parameter_name ?? ""));
   if (names.length === 0 || names.some((n) => !n)) {
-    throw new Error(`MySQL routine ${fn} does not exist, or its parameters could not be read`);
+    // A routine that has not been ported yet. Reported as incomplete setup rather than as an outage,
+    // so the message points at the missing migration instead of sending an operator hunting.
+    throw new AppError(503, `The ${fn} routine is not present on this database. The operator must apply the versioned migrations.`);
   }
   parameterCache.set(fn, names);
   return names;
@@ -107,6 +110,69 @@ export function mysqlDriver(actor: string): DataDriver {
       return result as T;
     },
   };
+}
+
+/**
+ * Translates a MySQL error into the same AppError the Supabase path produces.
+ *
+ * The ported routines raise the PostgreSQL SQLSTATE codes the application already mapped — 42501 for
+ * forbidden, 22023 for a rule violation, 40001 for a version conflict, P0002 for not found — so the
+ * API boundary behaves identically on both providers. Where MySQL raises its own condition, the
+ * errno is mapped instead: 1062 is a duplicate key, 3819 a CHECK violation, 1142 a refused grant.
+ */
+function translate(error: unknown): never {
+  const e = error as { sqlState?: string; errno?: number; message?: string };
+  const state = e?.sqlState ?? "";
+  const errno = e?.errno ?? 0;
+  const message = e?.message ?? "Unknown database error";
+
+  if (state === "P0002") throw new AppError(404, "Record not found");
+  if (state === "40001") throw new AppError(409, "This record changed. Refresh it before saving again.");
+  if (state === "28000") throw new AppError(401, message);
+  if (state === "42501") throw new AppError(403, message);
+  if (state === "22023") throw new AppError(422, message);
+  if (state === "23505" || errno === 1062) {
+    throw new AppError(409, "A matching record already exists. Check the client code, email or phone.");
+  }
+  if (state === "23514" || errno === 3819 || errno === 1265) {
+    throw new AppError(422, "Invalid data, missing required fields, or a status rule was not satisfied.");
+  }
+  // 1142 and 1143 are the engine refusing a table grant. Surfacing them as 403 keeps a mistake in
+  // the port from looking like an outage.
+  if (errno === 1142 || errno === 1143) {
+    throw new AppError(403, "This operation is not permitted for the application account.");
+  }
+  if (/does not exist|do not have|denied/i.test(message)) {
+    throw new AppError(503, "Database setup is incomplete. The operator must apply the versioned migrations.");
+  }
+  console.error(JSON.stringify({ event: "database_error", provider: "mysql", errno, state }));
+  throw new AppError(503, "The data service is unavailable. Please retry.");
+}
+
+/** Runs a scalar-returning query and returns the first row, or null. */
+export async function mysqlQuery<T = unknown>(sql: string, params: unknown[] = []): Promise<T | null> {
+  try {
+    const [rows] = await getPool().query<mysql.RowDataPacket[]>(sql, params as never[]);
+    return (rows[0] as T) ?? null;
+  } catch (error) {
+    translate(error);
+  }
+}
+
+/** Runs a query whose single column is aliased `result` and returns that value. */
+export async function mysqlScalar<T = unknown>(sql: string, params: unknown[] = []): Promise<T | null> {
+  const row = await mysqlQuery<Record<string, T>>(sql, params);
+  return row ? (row.result ?? null) : null;
+}
+
+/** Calls a stored procedure. Procedures are the only way to write, since MySQL forbids it in functions. */
+export async function mysqlCall(procedure: string, params: unknown[] = []): Promise<void> {
+  try {
+    const placeholders = params.map(() => "?").join(", ");
+    await getPool().query(`call ${procedure}(${placeholders})`, params as never[]);
+  } catch (error) {
+    translate(error);
+  }
 }
 
 /** Diagnostics for the health endpoint and the check tools. Never returns a password. */

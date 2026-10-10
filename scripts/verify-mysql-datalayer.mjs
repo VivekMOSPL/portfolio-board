@@ -126,7 +126,11 @@ const unknownFn = await mysqlDriver(ids.rm1A)
   .rpc("cb_does_not_exist")
   .then(() => null)
   .catch((e) => e.message);
-check("an unknown routine is refused", typeof unknownFn === "string" && /does not exist/.test(unknownFn), String(unknownFn));
+check(
+  "an unknown routine is refused and named",
+  typeof unknownFn === "string" && /cb_does_not_exist/.test(unknownFn) && /not present/.test(unknownFn),
+  String(unknownFn),
+);
 
 await closeMysqlPool();
 

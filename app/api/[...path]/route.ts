@@ -1,9 +1,14 @@
 import { NextRequest,NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { z,ZodError } from "zod";
-import { createHash,timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { account,authenticated,authClient,authThrottle,dbError,missingConfig,readEnv,requireTenant,rpc,setSessionCookies } from "@/lib/server";
+import { account,asSupabase,authenticated,authClient,authThrottle,dbError,missingConfig,readEnv,requireTenant,rpc,setLocalSessionCookie,setSessionCookies } from "@/lib/server";
 import { mailConfigured, sendInvitationEmail, sendRecoveryEmail } from "@/lib/mail";
+import { activeProvider } from "@/lib/db/config";
+import { mysqlCall } from "@/lib/db/mysql";
+import { hashPassword } from "@/lib/auth/passwords";
+import { SESSION_COOKIE, localSignIn, localSignOut } from "@/lib/auth/local";
 import { AppError,checkOrigin,filterInput,validateCommand,toCsv } from "@/lib/domain";
 import { bearerKey,hashIntegrationKey,issueIntegrationKey } from "@/lib/integration";
 
@@ -61,16 +66,33 @@ export async function GET(req:NextRequest,ctx:{params:Promise<{path:string[]}>})
   }
   if(path==="data"&&resource==="plans"){
    if(!ac.platform)throw new AppError(403,"Platform permission required");
-   const {data,error,count}=await db.from("cb_plans").select("*",{count:"exact"}).order("created_at").range((page-1)*30,page*30-1);
+   if(activeProvider()==="mysql")return reply(await rpc(db,"cb_read_plans",{p_offset:(page-1)*30,p_size:30}));
+   const {data,error,count}=await asSupabase(db).from("cb_plans").select("*",{count:"exact"}).order("created_at").range((page-1)*30,page*30-1);
    if(error)dbError(error);return reply({rows:data,total:count});
   }
   if(path==="data"&&resource==="tenants") {
    if(!ac.platform)throw new AppError(403,"Platform permission required");
-   const {data,error,count}=await db.from("cb_tenants").select("*",{count:"exact"}).order("created_at",{ascending:false}).range((page-1)*30,page*30-1);
+   if(activeProvider()==="mysql"){
+    const rows=await rpc(db,"cb_tenant_list") as unknown[];
+    return reply({rows,total:rows.length});
+   }
+   const {data,error,count}=await asSupabase(db).from("cb_tenants").select("*",{count:"exact"}).order("created_at",{ascending:false}).range((page-1)*30,page*30-1);
    if(error)dbError(error);return reply({rows:data,total:count});
   }
   uuid.parse(tenant);
   const member=ac.platform&&resource==="invitations"?null:requireTenant(ac,tenant);
+  if(path==="data"&&["filters","masters","clients","members","teams","timeline","notifications","imports","audit","settings","preferences"].includes(resource)&&activeProvider()==="mysql"){
+   // The offline provider reads through one scoped routine. The application user has no SELECT on any
+   // base table, so this is the only route to a row, and the predicate lives inside the database.
+   if(["imports","audit"].includes(resource)&&!["admin","auditor"].includes(member?.role??""))throw new AppError(403,"Permission required");
+   return reply(await rpc(db,"cb_read_page",{
+    p_resource:resource,
+    p_tenant:tenant,
+    p_q:resource==="clients"?q:null,
+    p_offset:(page-1)*30,
+    p_size:30,
+   }));
+  }
   if(resource==="invitations") {
    if(!ac.platform&&member?.role!=="admin")throw new AppError(403,"Administrator required");
    const rows=await rpc(db,"cb_invitations_list",{t:tenant});return reply({rows,total:rows.length});
@@ -98,7 +120,7 @@ export async function GET(req:NextRequest,ctx:{params:Promise<{path:string[]}>})
   const tables:Record<string,string>={filters:"cb_saved_filters",masters:"cb_master_data",clients:"cb_clients",members:"cb_members",teams:"cb_teams",timeline:"cb_timeline",notifications:"cb_notifications",imports:"cb_imports",audit:"cb_audit",settings:"cb_tenants",preferences:"cb_preferences"};
   const table=tables[resource];if(!table)throw new AppError(404,"Not found");
   if(["imports","audit"].includes(resource)&&!["admin","auditor"].includes(member?.role??""))throw new AppError(403,"Permission required");
-  let query=db.from(table).select("*",{count:"exact"}).eq(resource==="settings"?"id":"tenant_id",tenant);
+  let query=asSupabase(db).from(table).select("*",{count:"exact"}).eq(resource==="settings"?"id":"tenant_id",tenant);
   if(resource==="clients"){
    query=query.is("archived_at",null);
    if(q)query=query.ilike("name","%"+q.replace(/[\\%_]/g,"\\$&")+"%");
@@ -144,17 +166,29 @@ export async function POST(req:NextRequest,ctx:{params:Promise<{path:string[]}>}
   checkOrigin(req.headers.get("origin"),process.env.APP_URL||req.url);
   const input=await body(req);
   if(path==="auth/login"){
-   const values=credentials.parse(input),db=authClient();
+   const values=credentials.parse(input);
+   // Offline provider: credentials are verified against the local store and the lockout counter lives
+   // in the database, so authThrottle is a no-op there.
+   if(activeProvider()==="mysql"){
+    const {token}=await localSignIn(values.email,values.password,req.headers.get("user-agent")??"");
+    await setLocalSessionCookie(token);return reply({ok:true});
+   }
+   const db=authClient();
    await authThrottle(values.email);
-   const {data,error}=await db.auth.signInWithPassword(values);
+   const {data,error}=await asSupabase(db).auth.signInWithPassword(values);
    if(error||!data.session){await authThrottle(values.email,"failure");throw new AppError(401,"Sign-in failed. Check your credentials or try again later.");}
    await authThrottle(values.email,"success");
    await setSessionCookies(data.session);return reply({ok:true});
   }
+  // Registration, recovery and confirmation are hosted-service features. An offline installation
+  // provisions accounts with npm run auth:seed-local instead, which is an operator action.
+  if(activeProvider()==="mysql"&&["auth/signup","auth/forgot","auth/confirm"].includes(path)){
+   throw new AppError(503,"This is not available on an offline installation. Ask the operator to provision the account.");
+  }
   if(path==="auth/signup"){
    const values=credentials.extend({password:z.string().min(8).max(256)}).parse(input),db=authClient();
    await authThrottle(values.email);
-   const {error}=await db.auth.signUp(values);
+   const {error}=await asSupabase(db).auth.signUp(values);
    if(error)throw new AppError(422,"Account registration could not be completed. Check your email or try signing in.");
    return reply({message:"If registration is available, check your email to confirm your account, then sign in and accept your invitation."});
   }
@@ -178,7 +212,7 @@ export async function POST(req:NextRequest,ctx:{params:Promise<{path:string[]}>}
   }
   if(path==="auth/confirm"){
    const {token_hash,type}=z.object({token_hash:z.string().min(20).max(1024),type:z.enum(["recovery","email","signup","invite"])}).strict().parse(input);
-   const db=authClient(),{data,error}=await db.auth.verifyOtp({token_hash,type});
+   const db=authClient(),{data,error}=await asSupabase(db).auth.verifyOtp({token_hash,type});
    if(error||!data.session)throw new AppError(422,"This link is invalid, expired, or already used.");
    await setSessionCookies(data.session);return reply({ok:true});
   }
@@ -196,7 +230,7 @@ export async function POST(req:NextRequest,ctx:{params:Promise<{path:string[]}>}
    if(!inv||inv.used_at||inv.revoked_at||new Date(String(inv.expires_at))<=new Date())throw new AppError(422,"This invitation is invalid, expired, or already used.");
    await authThrottle(inv.email);
    const db=authClient();
-   const signIn=async()=>(await db.auth.signInWithPassword({email:inv.email,password})).data.session;
+   const signIn=async()=>(await asSupabase(db).auth.signInWithPassword({email:inv.email,password})).data.session;
    let session=await signIn();
    if(!session){
     // An account may already exist for this address, for example left unconfirmed by an earlier
@@ -220,21 +254,36 @@ export async function POST(req:NextRequest,ctx:{params:Promise<{path:string[]}>}
    const result=await rpc(authed,"cb_command",{p_tenant:null,p_action:"invite.accept",p_data:{token}});
    return reply({ok:true,tenant_id:result.tenant_id});
   }
-  const {db}=await authenticated();
+  const {db,user}=await authenticated();
   if(path==="auth/logout"){
    const {all}=z.object({all:z.boolean().default(false)}).strict().parse(input);
+   if(activeProvider()==="mysql"){
+    // Revokes the row, so the token stops working immediately rather than at expiry.
+    const jar=await cookies();
+    await localSignOut(jar.get(SESSION_COOKIE)?.value,all,user.id);
+    await setLocalSessionCookie(null);return reply({ok:true});
+   }
    await rpc(db,"cb_logout",{all_devices:all});
-   const {error}=await db.auth.signOut({scope:all?"global":"local"});
+   const {error}=await asSupabase(db).auth.signOut({scope:all?"global":"local"});
    if(error)throw new AppError(503,"Sign out failed. Please retry.");
    await setSessionCookies(null);return reply({ok:true});
   }
   if(path==="auth/password"){
    await account(db);
    const {password}=z.object({password:z.string().min(8).max(256)}).strict().parse(input);
-   const {error}=await db.auth.updateUser({password});
+   if(activeProvider()==="mysql"){
+    // Offline: replace the stored scrypt hash, then revoke every session so a stolen cookie cannot
+    // outlive the change. Same guarantee the Supabase path gets from a global sign-out.
+    await mysqlCall("cb_local_credential_set",[user.id,hashPassword(password),"scrypt"]);
+    const jar=await cookies();
+    await localSignOut(jar.get(SESSION_COOKIE)?.value,true,user.id);
+    await setLocalSessionCookie(null);
+    return reply({message:"Password updated. All sessions were revoked. Please sign in again."});
+   }
+   const {error}=await asSupabase(db).auth.updateUser({password});
    if(error)throw new AppError(422,"Password update failed. Reopen your recovery link or sign in again.");
    await rpc(db,"cb_logout",{all_devices:true});
-   await db.auth.signOut({scope:"global"});
+   await asSupabase(db).auth.signOut({scope:"global"});
    await setSessionCookies(null);
    return reply({message:"Password updated. All application sessions were revoked. Please sign in again."});
   }
