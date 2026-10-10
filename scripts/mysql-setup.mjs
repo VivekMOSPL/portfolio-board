@@ -1,4 +1,4 @@
-// Creates and seeds the MySQL provider database, then runs the isolation assertions.
+﻿// Creates and seeds the MySQL provider database, then runs the isolation assertions.
 //
 //   npm run db:mysql:setup     create the database, apply 001-003, grant the application user
 //   npm run db:mysql:checks    run the 25 isolation assertions in 004
@@ -20,7 +20,7 @@ import mysql from "mysql2/promise";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const mysqlDir = path.join(here, "..", "mysql");
 
-const SETUP_FILES = ["001_schema.sql", "002_authorization.sql", "003_seed.sql"];
+const SETUP_FILES = ["001_schema.sql", "002_authorization.sql", "003_seed.sql", "005_app_functions.sql"];
 const CHECK_FILE = "004_isolation_checks.sql";
 
 const MODE = process.argv.includes("--checks") ? "checks" : "setup";
@@ -69,7 +69,7 @@ async function applyFile(file) {
   console.log("ok");
 }
 
-console.log(`MySQL provider — ${MODE}`);
+console.log(`MySQL provider â€” ${MODE}`);
 console.log(`  target: ${host}:${port}/${database}  (schema as ${adminUser}, application as ${appUser})`);
 
 /**
@@ -141,7 +141,7 @@ try {
     for (const file of SETUP_FILES) await applyFile(file);
 
     // The application gets no direct read access to the base tables. Because the read procedures are
-    // owned by the administrator and run as SQL SECURITY DEFINER, they still work — so the only path
+    // owned by the administrator and run as SQL SECURITY DEFINER, they still work â€” so the only path
     // to client data is a routine that applies the scope predicate. A direct select is refused by the
     // engine, which is the guarantee PostgreSQL provided with row level security.
     for (const host_ of ["127.0.0.1", "localhost"]) {
