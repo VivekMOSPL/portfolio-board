@@ -1,0 +1,34 @@
+{
+  "$comment": "Database provider selection. This file names the provider and the environment variables that hold its settings; it never contains a credential. Change `provider` or set the DB_PROVIDER environment variable to override it. Secrets live in .env.local (ignored by git) and in the host environment only.",
+  "provider": "supabase",
+  "providers": {
+    "supabase": {
+      "label": "Supabase (PostgreSQL + Auth + PostgREST)",
+      "driver": "supabase",
+      "supportsAuth": true,
+      "supportsRowLevelSecurity": true,
+      "notes": "The original and fully supported provider. Row level security, security definer functions and Supabase Auth all apply. The application talks to PostgREST through supabase-js, not SQL.",
+      "settings": {
+        "url": { "env": "NEXT_PUBLIC_SUPABASE_URL", "required": true },
+        "publishableKey": { "env": "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "required": true },
+        "serviceRoleKey": { "env": "SUPABASE_SERVICE_ROLE_KEY", "required": true, "secret": true }
+      }
+    },
+    "mysql": {
+      "label": "MySQL or MariaDB (direct SQL)",
+      "driver": "mysql",
+      "supportsAuth": false,
+      "supportsRowLevelSecurity": false,
+      "notes": "Local development provider. MySQL has no row level security and no auth.uid(), so the schema carries the authorization predicates as views and every function takes the acting user explicitly. Tenant and record scope is therefore enforced by the functions and views, not by the engine. Authentication must be supplied separately. See mysql/README.md for the security differences.",
+      "settings": {
+        "host": { "env": "MYSQL_HOST", "required": true, "default": "127.0.0.1" },
+        "port": { "env": "MYSQL_PORT", "required": true, "default": 3306 },
+        "database": { "env": "MYSQL_DATABASE", "required": true, "default": "followthrough" },
+        "user": { "env": "MYSQL_USER", "required": true, "default": "followthrough" },
+        "password": { "env": "MYSQL_PASSWORD", "required": true, "secret": true },
+        "adminUser": { "env": "MYSQL_ADMIN_USER", "required": false, "default": "root" },
+        "adminPassword": { "env": "MYSQL_ADMIN_PASSWORD", "required": false, "secret": true }
+      }
+    }
+  }
+}

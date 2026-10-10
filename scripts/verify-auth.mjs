@@ -39,8 +39,12 @@ function visibleText() {
 }
 
 console.log(`--- sign in as ${email} (password never printed)`);
-await page.goto(`${BASE}/login`, { waitUntil: "networkidle" });
-await page.getByRole("heading", { name: "Welcome back" }).waitFor();
+// Explicit waits with generous timeouts rather than waitUntil:"networkidle". When this runs straight
+// after the browser smoke test, a second browser launch plus a cold page render can exceed the default
+// action timeout, and networkidle turns a slow render into a hard failure.
+await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded", timeout: 90000 });
+await page.getByRole("heading", { name: "Welcome back" }).waitFor({ timeout: 90000 });
+await page.getByLabel("Password *", { exact: true }).waitFor({ timeout: 90000 });
 await page.getByLabel("Email").fill(email);
 await page.getByLabel("Password *", { exact: true }).fill(password);
 await page.getByRole("button", { name: /sign in/i }).first().click();
@@ -54,36 +58,35 @@ console.log(`  session cookies: ${names.join(", ") || "none"}`);
 
 console.log("--- what the signed-in workspace shows");
 for (const path of ["/platform", "/dashboard", "/my-day", "/clients", "/team"]) {
-  await page.goto(`${BASE}${path}`, { waitUntil: "networkidle" });
+  await page.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded", timeout: 90000 });
   const text = await visibleText();
   const heading = (text.match(/^.{0,90}/) || [""])[0];
   console.log(`  ${path.padEnd(12)} -> ${heading || "(empty)"}`);
   await page.screenshot({ path: `artifacts/auth${path.replace(/\//g, "-")}.png`, fullPage: true });
 }
 
-console.log("--- create the first business from the platform console");
-await page.goto(`${BASE}/platform`, { waitUntil: "networkidle" });
-const text = await visibleText();
-console.log(`  platform page text: ${text.slice(0, 400)}`);
+console.log("--- platform console (read-only: this script never writes)");
+await page.goto(`${BASE}/platform`, { waitUntil: "domcontentloaded", timeout: 90000 });
+const platformText = await visibleText();
+const badge = /Super Admin/.test(platformText);
+const businesses = /Subscribed businesses/.test(platformText);
+console.log(`  Super Admin badge       : ${badge}`);
+console.log(`  Subscribed businesses   : ${businesses}`);
+console.log(`  text: ${platformText.slice(0, 240)}`);
+assert.ok(badge, "the platform console should show the Super Admin badge");
+assert.ok(businesses, "the platform console should list subscribed businesses");
+await page.screenshot({ path: "artifacts/auth-platform.png", fullPage: true });
 
-const nameField = page.getByLabel(/business name|name/i).first();
-if (await nameField.count()) {
-  await nameField.fill("IDash — Datachron Solutions");
-  const createButton = page.getByRole("button", { name: /create/i }).first();
-  if (await createButton.count()) {
-    await createButton.click();
-    await page.waitForTimeout(4000);
-    console.log(`  after create: ${(await visibleText()).slice(0, 300)}`);
-    await page.screenshot({ path: "artifacts/auth-platform-created.png", fullPage: true });
-  } else {
-    console.log("  no create button found - inspect artifacts/auth-platform.png");
-  }
-} else {
-  console.log("  no business-name field found - inspect artifacts/auth-platform.png");
-}
+// The platform console holds business metadata only. Assert that a platform administrator is not
+// silently granted client detail, which is the guarantee the schema is built around.
+assert.ok(
+  /does not grant client-data|Business metadata only/i.test(platformText),
+  "the platform console should state that it holds metadata only",
+);
+console.log("  metadata-only guarantee present: true");
 
 console.log("--- role-scoped navigation the admin can see");
-await page.goto(`${BASE}/dashboard`, { waitUntil: "networkidle" });
+await page.goto(`${BASE}/dashboard`, { waitUntil: "domcontentloaded", timeout: 90000 });
 const nav = await page.evaluate(() =>
   [...document.querySelectorAll("a[href^='/']")].map((a) => a.getAttribute("href")).filter(Boolean),
 );

@@ -31,7 +31,7 @@ Use links that send token hashes to the application and verify them through the 
   {{ .SiteURL }}/confirm?token_hash={{ .TokenHash }}
 For recovery:
   {{ .SiteURL }}/reset-password?token_hash={{ .TokenHash }}
-Configure and test templates in the actual provider. The application does not claim that email was delivered merely because a request succeeded. Business invitations currently generate expiring, single-use links for **manual secure delivery**. Invitation email dispatch/resend integration is not implemented.
+Configure and test templates in the actual provider. The application does not claim that email was delivered merely because a request succeeded. Business invitations are emailed when the server has an SMTP provider configured (SMTP_* in the environment); otherwise, and whenever a send fails, the administrator is given the expiring single-use link for manual secure delivery instead. The response states which of the two happened and never reports a send that did not occur.
 
 The invitation recipient must verify their Auth email, sign in, then open the invitation. Expired, revoked, wrong-email and already-used tokens are rejected. Tokens are hashed at rest and returned only on creation.
 
@@ -45,13 +45,61 @@ The database test suite creates two isolated businesses and real SQL fixtures fo
 There is no production demo account or default password. Do not run the legacy seed file.
 
 ## Commands
-- npm test — PostgreSQL/RLS/transaction and typed-input/CSV/XLSX tests.
-- npm run typecheck — TypeScript.
-- npm run lint — ESLint.
-- npm run build — production compilation.
-- npm run start -- --port 3100 — serve built app.
-- npm run test:browser — headless Edge checks against localhost:3100, with screenshots in artifacts/.
+### Harness
+Run these in order. Each step is independent, and the ladder is arranged so a constrained machine can
+stop early.
+
+- `npm run verify:quick` — typecheck, lint and the browser-bundle secret scan. No server, no database, low memory.
+- `npm run verify:static` — verify:quick plus `npm test` and `npm run mail:verify`.
+- `npm run verify:live` — needs the app running on localhost:3100: schema readiness, migration plan, headless browser checks and the authenticated journey.
+- `npm run verify:all` — verify:static then verify:live.
+
+Individual commands:
+- npm test — PostgreSQL/RLS/transaction and typed-input/CSV/XLSX tests. Runs files serially with a raised
+  semi-space, because the in-process WASM PostgreSQL is memory-hungry: Node runs test files in parallel by
+  default and the young generation can exhaust. See "Resource requirements" below.
+- npm run typecheck — TypeScript. `npm run lint` — ESLint. `npm run build` — production compilation.
+- npm run start -- --port 3100 — serve the built app.
+- npm run test:browser — headless Edge checks against localhost:3100, screenshots in artifacts/.
+- npm run verify:auth — signs in through a real browser and checks the platform console. Read-only.
 - npm run check:ready — environment and migrated REST schema readiness; no client records fetched.
+- npm run check:secrets — asserts no configured secret value reached .next/static.
+- npm run mail:verify — proves the invitation and recovery emails, plus the failure and unconfigured paths,
+  against a throwaway local SMTP server.
+- npm run smtp:check / npm run smtp:test — verify the configured mail provider, optionally sending one message.
+- npm run db:plan — prints which migrations are applied and which would run. Changes nothing.
+- npm run db:migrate — applies pending migrations over DATABASE_URL, transactionally, with a checksum ledger.
+- npm run db:reset — drops every cb_ object so a half-applied schema can be rebuilt. Refuses when real data exists.
+- npm run db:bundle — regenerates supabase/apply-all.sql for the SQL editor.
+- npm run go:live — readiness, platform bootstrap, readiness again.
+
+### Third-party tools required
+Runtime services:
+- **Supabase** project (PostgreSQL + Auth). Required. Hosted project configuration is not reproducible locally.
+- **Node.js** 24 LTS and npm. No `engines` pin and no `.nvmrc`; developed on Node 24.21.0.
+- **PostgreSQL connection** to the Supabase session pooler, for migrations only (`DATABASE_URL`). The direct
+  `db.<ref>.supabase.co` host publishes IPv6 only, so on an IPv4-only network the pooler is the only route.
+- **SMTP provider** (ZeptoMail) — optional. Without it invitations fall back to a manual link and Supabase's
+  own auth mail cannot send.
+- **Vercel** — deployment target. Not needed for local work.
+
+Build and test tooling:
+- **Microsoft Edge** — required by the browser harness. Playwright drives the system Edge through
+  `channel: "msedge"`, so no Playwright browser download is needed, but Edge must be installed.
+- **PGlite** (@electric-sql/pglite) — in-process WASM PostgreSQL for the database tests. No Docker, no local
+  PostgreSQL server and no Supabase CLI are required.
+- **pg** (node-postgres) — used by the migration and reset scripts.
+- **GitHub CLI** (`gh`) — optional, for checking repository state.
+
+Application dependencies: Next.js 16.3.5, React 19.2.8, @supabase/supabase-js 2.x, Zod 4, ExcelJS 4 (with a
+pinned `uuid` override), nodemailer 10. Build tooling: TypeScript 5, ESLint 9, Tailwind 4, tsx.
+
+### Resource requirements
+The database suite runs a real PostgreSQL in-process. It needs roughly **1 GB of free RAM**; below that the
+V8 young generation can fail with `NewSpace::EnsureCurrentCapacity Allocation failed`, which surfaces as
+`database.test.mjs` failing while the other files pass. Measured on a 5.9 GB machine: 6/6 runs passed with
+0.8 GB free and the suite crashed with 0.2 GB free. The browser steps additionally need enough memory to
+launch Edge. Close other work or use `verify:quick` when memory is tight.
 
 ## Routes
 Public: /login, /register, /forgot-password, /reset-password, /confirm, /invite, /privacy, /terms.
